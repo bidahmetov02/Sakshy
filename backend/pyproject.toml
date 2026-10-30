@@ -1,6 +1,54 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "Sakshy backend: API, worker and target-site emulator"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "asyncpg",
+    "fastapi",
+    "pydantic",
+    "pydantic-settings",
+    "sqlalchemy[asyncio]",
+    "uvicorn[standard]",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2",
+    "pyright",
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+# Not a distributable package: the top-level packages (core, api, worker,
+# emulator) are imported from this directory.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "api", "worker", "emulator", "tests"]
+
+[tool.pyright]
+include = ["core", "api", "worker", "emulator", "tests"]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

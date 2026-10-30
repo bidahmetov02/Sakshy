@@ -1,0 +1,72 @@
+name: sakshy
+
+x-backend: &backend
+  build: ./backend
+  environment:
+    DATABASE_URL: postgresql+asyncpg://sakshy:sakshy@db:5432/sakshy
+    LOG_LEVEL: INFO
+  depends_on:
+    db:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: sakshy
+      POSTGRES_PASSWORD: sakshy
+      POSTGRES_DB: sakshy
+    volumes:
+      # Postgres 18 images keep data in a versioned subdirectory of this path.
+      - db-data:/var/lib/postgresql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432" # dev: psql and host-run tests
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sakshy -d sakshy"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000" # dev: /api/docs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "worker.main"]
+    # Graceful shutdown waits ~10 s for in-flight checks; give it headroom.
+    stop_grace_period: 15s
+
+  emulator:
+    build: ./backend
+    command: ["uvicorn", "emulator.main:app", "--host", "0.0.0.0", "--port", "9000"]
+    ports:
+      - "127.0.0.1:9000:9000" # dev: control endpoint
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "127.0.0.1:8025:8025" # web UI; SMTP stays internal on 1025
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
