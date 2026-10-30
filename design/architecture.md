@@ -125,3 +125,10 @@ in-flight checks, then exit. Leases on anything unfinished simply expire.
 **first**. With a single order everywhere there are no deadlocks, and every
 decision is made on the latest committed state. The sweep uses `SKIP LOCKED`,
 so it never waits: it just retries the check next round.
+
+**Read after the lock, in a separate statement.** Take the `check_state` lock
+with a statement that reads only `check_state`, then read `checks`, groups and
+windows in the next statement. In READ COMMITTED, a statement that had to wait
+for a row lock re-checks only the rows it locked; rows it joined still come
+from the snapshot taken before the wait. A completion that waited for a pause
+would then still see `is_paused = false` and record its result.

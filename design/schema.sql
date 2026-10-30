@@ -298,13 +298,23 @@ CREATE TABLE worker_heartbeats (
 -- locks that check's check_state row FIRST, then incidents/outbox.
 -- One order everywhere = no deadlocks, and every decision is made on
 -- the latest committed state.
+-- READ AFTER THE LOCK, IN A SEPARATE STATEMENT: take the lock with a
+-- statement that reads only check_state, then read checks/groups/windows
+-- in the next one. In READ COMMITTED, a statement that waited for a row
+-- lock re-checks only the rows it locked (EvalPlanQual); joined rows stay
+-- as they were in its snapshot from BEFORE the wait.
 
 -- 2) COMPLETE a run: ONE transaction
---    a. SELECT s.*, c.is_paused, c.deleted_at FROM check_state s
---       JOIN checks c ON c.id = s.check_id
---       WHERE s.check_id = :id AND s.lease_owner = :worker_id
---       FOR UPDATE OF s;
+--    a. SELECT next_run_at, state, consecutive_failures, first_failure_at
+--       FROM check_state
+--       WHERE check_id = :id AND lease_owner = :worker_id
+--         AND lease_until = :claimed_lease_until     -- fencing token
+--       FOR UPDATE;
 --         0 rows                -> lease lost (fenced out): ROLLBACK, discard
+--       SELECT c.owner_id, c.group_id, c.interval_s, c.is_paused, c.deleted_at,
+--              coalesce(g.alert_emails, c.alert_emails), now()
+--       FROM checks c LEFT JOIN check_groups g ON g.id = c.group_id
+--       WHERE c.id = :id;      -- separate statement: sees a pause we waited for
 --         paused or deleted     -> clear lease only, discard result, COMMIT
 --    b. INSERT INTO check_results ...
 --    c. rollup upsert (below), skipped for retries
@@ -368,6 +378,11 @@ CREATE TABLE worker_heartbeats (
 --         AND (w.check_id = c.id OR w.group_id = c.group_id))
 -- FOR UPDATE OF s, i SKIP LOCKED;
 --    then INSERT notifications + UPDATE incidents SET down_alert_queued = true
+--    Joined reads are safe enough here: SKIP LOCKED never waits, and the
+--    incident row is itself locked, so if a completion closed it just before
+--    the lock, the re-check drops it. Only checks.group_id and the windows
+--    come from the statement's snapshot, so a window created in that same
+--    instant may be missed, which costs at most one early DOWN email.
 
 -- 8) PAUSE (API), one transaction. Resume = is_paused false, next_run_at = now().
 -- SELECT 1 FROM check_state WHERE check_id = :id FOR UPDATE;      -- lock first

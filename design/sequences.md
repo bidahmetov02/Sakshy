@@ -23,7 +23,8 @@ sequenceDiagram
     S-->>T: status, body, elapsed (or timeout, DNS, TLS error)
     T->>T: evaluate → ok or error_kind
     T->>DB: BEGIN
-    T->>DB: SELECT check_state + checks WHERE lease_owner = me FOR UPDATE
+    T->>DB: SELECT check_state WHERE lease_owner = me AND lease_until = my lease FOR UPDATE
+    T->>DB: SELECT checks + group (separate statement: fresh snapshot after the lock)
     alt 0 rows: lease lost (fenced out)
         T->>DB: ROLLBACK, result discarded
     else check was paused or deleted meanwhile
@@ -52,6 +53,13 @@ sequenceDiagram
   incident without its email row.
 - `next_run_at` is computed at completion (anchored to the schedule, or a
   retry time), so a check can never be claimed again while it's running.
+- The lock is taken by a statement that reads only `check_state`; the config
+  is read by the next statement. One joined `SELECT ... FOR UPDATE OF
+  check_state` would re-check only the locked row after waiting for a pause,
+  and miss `is_paused` on the joined `checks` row (see the lock-order rule in
+  `architecture.md`).
+- The lease is matched on `lease_until` too (a fencing token), so even a stale
+  run of the *same* worker can't overwrite a newer run.
 
 ---
 
@@ -161,7 +169,7 @@ sequenceDiagram
     Note over DB: The run lost with W1 left no result row: it shows as a gap, never as a failure
     rect rgba(128, 128, 128, 0.12)
         Note over W1,W2: Zombie variant: W1 was only stalled, not dead
-        W1->>DB: completion tx: SELECT ... WHERE lease_owner = w1 FOR UPDATE
+        W1->>DB: completion tx: SELECT check_state WHERE lease_owner = w1 AND lease_until = w1's lease FOR UPDATE
         DB-->>W1: 0 rows (fenced out)
         W1->>DB: ROLLBACK, stale result discarded
     end
@@ -231,7 +239,8 @@ sequenceDiagram
     API->>DB: UPDATE incidents SET ended_at = now(), end_reason = 'paused'
     API->>DB: pg_notify, COMMIT
     API-->>U: 204
-    T->>DB: completion tx: SELECT check_state + checks FOR UPDATE (waits while the API holds the lock)
+    T->>DB: completion tx: SELECT check_state FOR UPDATE (waits while the API holds the lock)
+    T->>DB: SELECT checks (new statement, so it sees the API's commit)
     DB-->>T: is_paused = true
     T->>DB: clear lease only, discard result, COMMIT
     Note over API,T: If the worker locks first, the API waits instead. Its UPDATE then sees the worker's committed changes, for example an incident the worker just opened, and closes that incident.
@@ -239,4 +248,7 @@ sequenceDiagram
 
 **Why it's correct either way round:** both sides lock the same row first, so
 one transaction always runs completely before the other. Whichever goes second
-works from the other's committed result.
+works from the other's committed result, provided it reads that result with a
+new statement after getting the lock. Reading `checks` in the same statement
+that waited for the lock would see the pre-pause config (tested in
+`tests/test_runs.py`).
