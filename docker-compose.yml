@@ -1,13 +1,15 @@
 name: sakshy
 
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://sakshy:sakshy@db:5432/sakshy
+  LOG_LEVEL: INFO
+
 x-backend: &backend
   build: ./backend
-  environment:
-    DATABASE_URL: postgresql+asyncpg://sakshy:sakshy@db:5432/sakshy
-    LOG_LEVEL: INFO
+  environment: *backend-env
   depends_on:
-    db:
-      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
   restart: unless-stopped
 
 services:
@@ -28,6 +30,15 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  # Applies migrations once, then exits; api and worker start only if it succeeds.
+  migrate:
+    build: ./backend
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
 
   api:
     <<: *backend

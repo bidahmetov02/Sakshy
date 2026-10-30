@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Sakshy backend: API, worker and target-site emulator"
 requires-python = ">=3.14"
 dependencies = [
+    "alembic",
     "asyncpg",
     "fastapi",
     "pydantic",
@@ -34,13 +35,13 @@ target-version = "py314"
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S106", "S608"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["core", "api", "worker", "emulator", "tests"]
+known-first-party = ["core", "api", "worker", "emulator", "migrations", "tests"]
 
 [tool.pyright]
-include = ["core", "api", "worker", "emulator", "tests"]
+include = ["core", "api", "worker", "emulator", "migrations", "tests"]
 typeCheckingMode = "strict"
 pythonVersion = "3.14"
 venvPath = "."
@@ -52,3 +53,20 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+
+[tool.alembic]
+script_location = "%(here)s/migrations"
+prepend_sys_path = ["."]
+
+# Generated revisions come out lint-clean: drop unused imports, then format.
+[[tool.alembic.post_write_hooks]]
+name = "ruff_fix"
+type = "module"
+module = "ruff"
+options = "check --fix-only REVISION_SCRIPT_FILENAME"
+
+[[tool.alembic.post_write_hooks]]
+name = "ruff_format"
+type = "module"
+module = "ruff"
+options = "format REVISION_SCRIPT_FILENAME"

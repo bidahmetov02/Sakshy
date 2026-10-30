@@ -17,6 +17,7 @@ COPY core ./core
 COPY api ./api
 COPY worker ./worker
 COPY emulator ./emulator
+COPY migrations ./migrations
 
 RUN useradd --system --no-create-home app
 USER app
