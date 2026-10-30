@@ -7,6 +7,7 @@ dependencies = [
     "alembic",
     "asyncpg",
     "fastapi",
+    "httpx2",
     "pydantic",
     "pydantic-settings",
     "sqlalchemy[asyncio]",
@@ -15,7 +16,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx2",
     "pyright",
     "pytest",
     "pytest-asyncio",

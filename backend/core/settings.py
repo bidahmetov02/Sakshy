@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     )
     log_level: str = "INFO"
 
+    # Worker
+    worker_concurrency: int = 100  # max checks in flight; also the DNS thread pool size
+    worker_claim_interval_s: float = 1.0
+    worker_heartbeat_interval_s: float = 10.0
+    worker_shutdown_grace_s: float = 10.0  # wait this long for in-flight checks on SIGTERM
+
 
 @lru_cache
 def get_settings() -> Settings:

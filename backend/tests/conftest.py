@@ -2,9 +2,11 @@
 
 They use the separate `sakshy_test` database, created by `db/init/` on first start.
 Override with TEST_DATABASE_URL. Each session rebuilds the schema from the migrations.
+Probe and worker tests also need the compose `emulator` service (override: EMULATOR_URL).
 """
 
 import os
+import urllib.request
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -58,3 +60,16 @@ async def engine(migrated_engine: AsyncEngine) -> AsyncGenerator[AsyncEngine]:
     tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
     async with migrated_engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+
+
+EMULATOR_URL = os.environ.get("EMULATOR_URL", "http://127.0.0.1:9000")
+
+
+@pytest.fixture(scope="session")
+def emulator() -> str:
+    """Base URL of the compose `emulator` service (`docker compose up -d --build emulator`)."""
+    try:
+        urllib.request.urlopen(f"{EMULATOR_URL}/ok", timeout=2).close()  # noqa: S310
+    except OSError as exc:
+        pytest.fail(f"emulator not reachable at {EMULATOR_URL}: {exc}")
+    return EMULATOR_URL
