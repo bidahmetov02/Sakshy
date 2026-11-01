@@ -128,14 +128,20 @@ CREATE TABLE check_results (
 ) PARTITION BY RANGE (checked_at);
 
 -- Safety net so an insert never fails for lack of a partition.
--- Caveat: if rows land here, creating that day's partition later fails
--- until they are moved, so the worker must create partitions days ahead.
+-- Caveat: if rows land here, that day's partition can no longer be created.
+-- Housekeeping runs at worker startup (before claiming) and creates
+-- partitions 7 days ahead, so this needs a week of failed housekeeping. If it
+-- happens, the day simply stays in the default (no rows are moved) and its
+-- rows age out by retention's DELETE like any others.
 CREATE TABLE check_results_default PARTITION OF check_results DEFAULT;
 
--- Created by the worker's housekeeping job, ~7 days ahead, e.g.:
+-- Created by the worker's housekeeping job, today + 7 days ahead (UTC days), e.g.:
 -- CREATE TABLE check_results_20261030 PARTITION OF check_results
 --     FOR VALUES FROM ('2026-10-30 00:00+00') TO ('2026-10-31 00:00+00');
--- Retention: DROP TABLE check_results_20261001;   -- instant
+-- Retention (7 days): DROP TABLE check_results_20261001;   -- instant
+-- plus DELETE of expired rows still in the default partition.
+-- One worker at a time (session advisory lock); each DDL in its own short
+-- transaction with lock_timeout, since it locks the whole parent table.
 
 
 -- ---------- Hourly rollups (week / month charts, uptime %) ----------
@@ -210,6 +216,13 @@ CREATE INDEX mw_group_idx ON maintenance_windows (group_id, ends_at) WHERE group
 -- and marking 'sent' can still re-send once (at-least-once delivery).
 -- Claiming reuses next_attempt_at as a lease: the sender sets it to
 -- now() + 60 s when it picks a row, so a crashed sender's rows retry later.
+-- Outcomes are fenced on `attempts`, so a sender whose lease expired can't
+-- overwrite the outcome of the sender that took the row over.
+-- Retries: 4xx / connection errors back off 30 s, doubling up to 30 min;
+-- 'failed' after 8 attempts (the last ~1 h after the first). 5xx replies fail
+-- at once.
+-- Ordering: an UP row is not claimed while the DOWN row for the same
+-- (incident, recipient) is still pending, so UP never arrives before DOWN.
 CREATE TABLE notifications (
     id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     incident_id     bigint        NOT NULL REFERENCES incidents (id) ON DELETE CASCADE,

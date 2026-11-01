@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Sakshy backend: API, worker and target-site emulator"
 requires-python = ">=3.14"
 dependencies = [
+    "aiosmtplib>=5.1.3",
     "alembic",
     "asyncpg",
     "fastapi",

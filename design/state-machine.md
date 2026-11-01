@@ -42,8 +42,11 @@ changes whether emails are sent.
 | `RETRY_DELAY` | 10 s (or the interval, if shorter) | spacing of confirmation retries |
 | Recovery | 1 success | one good run closes the incident |
 
-So a site is confirmed down **about 20 s after its first failure**, whatever
-its interval (30 s or 1 h).
+So confirming DOWN takes 3 probes plus 2 retry gaps, whatever the interval
+(30 s or 1 h). Each gap starts when the previous probe ends, so the time from
+the first probe to DOWN is about `20 s + 3 × probe duration`: ~20 s for a fast
+error (503, connection refused), ~50 s for a site that hangs until a 10 s
+timeout. The API caps `timeout_s` at 30 s, so it is never more than ~2 min.
 
 ## Transitions and side effects
 

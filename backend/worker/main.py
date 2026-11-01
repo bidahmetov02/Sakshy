@@ -1,4 +1,5 @@
-"""Worker entrypoint: claims due checks, probes them, records the results.
+"""Worker entrypoint: claims due checks, probes them, records the results; sends alert
+emails, runs the maintenance sweep and housekeeping.
 
 The worker coordinates with other workers only through the database, so any number of
 them can run side by side (`docker compose up --scale worker=3`).
@@ -12,6 +13,7 @@ import secrets
 import signal
 import socket
 import time
+from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
@@ -21,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.db import create_engine
 from core.log import configure_logging
 from core.settings import Settings, get_settings
-from worker import heartbeat, runs
+from worker import heartbeat, housekeeping, outbox, runs, sweep
 from worker.probe import create_client, probe
 
 log = logging.getLogger("worker")
@@ -32,11 +34,32 @@ async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
         await asyncio.wait_for(stop.wait(), seconds)
 
 
+async def _every(
+    stop: asyncio.Event, seconds: float, job: Callable[[], Awaitable[object]], name: str
+) -> None:
+    """Run `job` every `seconds` until stopped. A failed round is logged and retried."""
+    while not stop.is_set():
+        await _sleep_or_stop(stop, seconds)
+        if stop.is_set():
+            break
+        try:
+            await job()
+        except Exception:
+            log.exception("%s failed", name)
+
+
 class Worker:
-    def __init__(self, settings: Settings, engine: AsyncEngine, client: httpx2.AsyncClient) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        engine: AsyncEngine,
+        client: httpx2.AsyncClient,
+        send: outbox.Send,
+    ) -> None:
         self.settings = settings
         self.engine = engine
         self.client = client
+        self.send = send
         self.id = f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(2)}"
         self.in_flight: set[asyncio.Task[None]] = set()
 
@@ -71,13 +94,27 @@ class Worker:
             # The lease expires and another run picks the check up.
             log.exception("check %d: run failed", claim.check_id)
 
-    async def heartbeat_loop(self, stop: asyncio.Event) -> None:
-        while not stop.is_set():
-            await _sleep_or_stop(stop, self.settings.worker_heartbeat_interval_s)
-            try:
-                await heartbeat.mark_alive(self.engine, self.id)
-            except Exception:
-                log.exception("heartbeat failed")
+    async def housekeep(self) -> None:
+        await housekeeping.run(self.engine, self.settings.rollup_retention_days)
+
+    def background(self, stop: asyncio.Event) -> list[asyncio.Task[None]]:
+        """The periodic jobs beside the claim loop."""
+        s = self.settings
+        jobs: list[tuple[float, Callable[[], Awaitable[object]], str]] = [
+            (
+                s.worker_heartbeat_interval_s,
+                lambda: heartbeat.mark_alive(self.engine, self.id),
+                "heartbeat",
+            ),
+            (
+                s.worker_outbox_interval_s,
+                lambda: outbox.send_due(self.engine, s, self.send, stop),
+                "outbox",
+            ),
+            (s.worker_sweep_interval_s, lambda: sweep.sweep(self.engine), "maintenance sweep"),
+            (s.worker_housekeeping_interval_s, self.housekeep, "housekeeping"),
+        ]
+        return [asyncio.create_task(_every(stop, *job)) for job in jobs]
 
     async def drain(self) -> None:
         """Wait for in-flight checks, then cancel the rest: their leases simply expire."""
@@ -93,19 +130,24 @@ class Worker:
             log.warning("abandoned %d in-flight checks", len(pending))
 
 
-async def run(settings: Settings, stop: asyncio.Event) -> None:
+async def run(settings: Settings, stop: asyncio.Event, send: outbox.Send | None = None) -> None:
     engine = create_engine(str(settings.database_url))
     try:
         async with create_client() as client:
-            worker = Worker(settings, engine, client)
+            worker = Worker(settings, engine, client, send or outbox.smtp_sender(settings))
             await heartbeat.mark_alive(engine, worker.id)
+            # Before claiming, so today's results partition exists.
+            try:
+                await worker.housekeep()
+            except Exception:
+                log.exception("housekeeping failed")
             spread = await runs.spread_overdue_call_times(engine)
             log.info("worker started: %s, spread %d overdue checks", worker.id, spread)
-            heartbeats = asyncio.create_task(worker.heartbeat_loop(stop))
+            background = worker.background(stop)
             await worker.claim_loop(stop)
             log.info("worker stopping: %d checks in flight", len(worker.in_flight))
             await worker.drain()
-            await heartbeats
+            await asyncio.gather(*background)
             await heartbeat.remove(engine, worker.id)
     finally:
         await engine.dispose()

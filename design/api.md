@@ -27,7 +27,7 @@ OpenAPI spec at `/api/docs`. This page is the human-readable overview.
 | Method | Path | Body / query | Returns | Notes |
 |---|---|---|---|---|
 | GET | `/checks` | `?group_id=` | list of checks with live state | **dashboard snapshot**: config + `check_state` + open incident `started_at` |
-| POST | `/checks` | `{name, url, interval_s, timeout_s, expected_status, expected_body?, group_id?, alert_emails[]}` | 201 check | `alert_emails` required; the UI pre-fills the account email. Used only while ungrouped: a group's list replaces it. Responses include `effective_alert_emails` so the UI can show who actually gets alerted. |
+| POST | `/checks` | `{name, url, interval_s, timeout_s, expected_status, expected_body?, group_id?, alert_emails[]}` | 201 check | `timeout_s` at most 30 s (bounds the time to confirm DOWN, see `state-machine.md`). `alert_emails` required; the UI pre-fills the account email. Used only while ungrouped: a group's list replaces it. Responses include `effective_alert_emails` so the UI can show who actually gets alerted. |
 | GET | `/checks/{id}` | none | check with live state | |
 | PATCH | `/checks/{id}` | any config fields | check | state is kept; an interval change recomputes `next_run_at` |
 | DELETE | `/checks/{id}` | none | 204 | soft delete; closes an open incident (`check_deleted`) |

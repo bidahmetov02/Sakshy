@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     worker_claim_interval_s: float = 1.0
     worker_heartbeat_interval_s: float = 10.0
     worker_shutdown_grace_s: float = 10.0  # wait this long for in-flight checks on SIGTERM
+    worker_outbox_interval_s: float = 2.0
+    worker_sweep_interval_s: float = 15.0
+    worker_housekeeping_interval_s: float = 3600.0
+    rollup_retention_days: int = 90  # hourly rollups; raw results are kept 7 days
+
+    # Alert emails
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_timeout_s: float = 10.0
+    mail_from: str = "Sakshy <alerts@sakshy.local>"
+    app_base_url: str = "http://localhost:8080"  # for links in emails
 
 
 @lru_cache

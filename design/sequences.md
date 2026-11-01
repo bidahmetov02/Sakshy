@@ -90,11 +90,15 @@ sequenceDiagram
         alt sent
             SE->>DB: UPDATE status = 'sent', sent_at = now()
         else SMTP error
-            SE->>DB: UPDATE next_attempt_at = now() + backoff, last_error, failed after max attempts
+            SE->>DB: UPDATE next_attempt_at = now() + backoff (30 s doubling, max 30 min), last_error; failed after 8 attempts (~1 h) or on 5xx
         end
     end
     Note over SE,DB: Sender crashes after claiming → the rows become due again after 60 s (at-least-once)
 ```
+
+**UP never before DOWN:** the sender doesn't claim an UP row while the DOWN row
+for the same incident and recipient is still pending (in backoff or being
+sent). If that DOWN fails for good, the UP is sent anyway.
 
 **Why the sweep locks `check_state` with `SKIP LOCKED`:** without it, this race
 is possible. The sweep queues the DOWN email at the same moment a check task

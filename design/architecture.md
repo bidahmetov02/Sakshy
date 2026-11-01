@@ -106,7 +106,7 @@ flowchart TB
 | Check task | per claim | target site | everything in the completion tx | a slow site only blocks its own task |
 | Outbox sender | every 2 s | `notifications` due | status, attempts | a slow SMTP server never delays checks |
 | Maintenance sweep | every 15 s | open unalerted incidents, windows | outbox rows, `down_alert_queued` | window end is a time event, not a check result |
-| Housekeeping | hourly | partition list, soft-deleted checks | partitions, hard deletes | heavy and rare |
+| Housekeeping | at startup, then hourly; one worker at a time | partition list, soft-deleted checks | partitions (7 days ahead, 7 days kept), rollups past 90 days, checks soft-deleted over 8 days ago, stale heartbeats | heavy and rare |
 | Heartbeat | every 10 s | none | `worker_heartbeats` | lets the UI mark "monitoring was offline" |
 
 **Shared inside the process:** one `httpx.AsyncClient`, one SQLAlchemy async

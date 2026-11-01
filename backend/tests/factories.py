@@ -7,7 +7,17 @@ from typing import Any
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from core.models import Check, CheckGroup, CheckState, MaintenanceWindow, User
+from core.models import (
+    AlertKind,
+    Check,
+    CheckGroup,
+    CheckState,
+    ErrorKind,
+    Incident,
+    MaintenanceWindow,
+    Notification,
+    User,
+)
 
 
 async def add_user(engine: AsyncEngine, email: str = "alice@x.io") -> int:
@@ -64,3 +74,30 @@ async def state_of(engine: AsyncEngine, check_id: int) -> CheckState:
         state = await session.get(CheckState, check_id)
         assert state is not None
         return state
+
+
+async def add_incident(engine: AsyncEngine, check_id: int, **overrides: Any) -> int:
+    """An open incident that started ten minutes ago and was alerted."""
+    values = {
+        "check_id": check_id,
+        "started_at": func.now() - text("interval '10 min'"),
+        "detected_at": func.now() - text("interval '9 min'"),
+        "cause_kind": ErrorKind.TIMEOUT,
+        "cause_message": "no response within 10 s",
+        "down_alert_queued": True,
+    } | overrides
+    async with engine.begin() as conn:
+        stmt = insert(Incident).values(values).returning(Incident.id)
+        return (await conn.execute(stmt)).scalar_one()
+
+
+async def add_notification(
+    engine: AsyncEngine, incident_id: int, recipient: str, kind: AlertKind = AlertKind.DOWN
+) -> int:
+    async with engine.begin() as conn:
+        stmt = (
+            insert(Notification)
+            .values(incident_id=incident_id, kind=kind, recipient=recipient)
+            .returning(Notification.id)
+        )
+        return (await conn.execute(stmt)).scalar_one()

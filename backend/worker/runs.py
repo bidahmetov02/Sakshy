@@ -25,9 +25,9 @@ from core.models import (
     Incident,
     IncidentEndReason,
     MaintenanceWindow,
-    Notification,
 )
 from worker import state_machine as sm
+from worker.outbox import alert_recipients, enqueue
 from worker.probe import ProbeResult
 
 log = logging.getLogger("worker.runs")
@@ -168,7 +168,7 @@ async def complete(
                     Check.interval_s,
                     Check.is_paused,
                     Check.deleted_at,
-                    func.coalesce(CheckGroup.alert_emails, Check.alert_emails),
+                    alert_recipients(),
                     func.now(),
                 )
                 .outerjoin(CheckGroup, CheckGroup.id == Check.group_id)
@@ -318,7 +318,7 @@ async def _open_incident(
         )
     ).scalar_one()
     if not in_maintenance:
-        await _enqueue(conn, incident_id, AlertKind.DOWN, recipients)
+        await enqueue(conn, incident_id, AlertKind.DOWN, recipients)
 
 
 async def _close_incident(
@@ -338,11 +338,4 @@ async def _close_incident(
         return
     incident_id, down_alert_queued = closed
     if down_alert_queued:
-        await _enqueue(conn, incident_id, AlertKind.UP, recipients)
-
-
-async def _enqueue(
-    conn: AsyncConnection, incident_id: int, kind: AlertKind, recipients: list[str]
-) -> None:
-    rows = [{"incident_id": incident_id, "kind": kind, "recipient": r} for r in recipients]
-    await conn.execute(pg_insert(Notification).values(rows).on_conflict_do_nothing())
+        await enqueue(conn, incident_id, AlertKind.UP, recipients)
