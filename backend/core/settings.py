@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import PostgresDsn
+from pydantic import PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,11 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://sakshy:sakshy@localhost:5432/sakshy"
     )
     log_level: str = "INFO"
+
+    # API auth. The API refuses to start without a secret; the worker doesn't need one.
+    jwt_secret: SecretStr | None = None  # HS256 key, at least 32 characters
+    access_token_ttl_s: int = 24 * 3600  # a JWT can't be revoked: logout only drops the cookie
+    cookie_secure: bool = True  # browsers accept Secure cookies on http://localhost
 
     # Worker
     worker_concurrency: int = 100  # max checks in flight; also the DNS thread pool size

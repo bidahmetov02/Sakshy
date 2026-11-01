@@ -4,7 +4,6 @@ Every time comparison uses the database clock (`now()`), never the worker's.
 """
 
 import enum
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.orm import aliased
 
+from core.events import notify_check
 from core.models import (
     AlertKind,
     Check,
@@ -34,7 +34,6 @@ log = logging.getLogger("worker.runs")
 
 LEASE_MARGIN_S = 5  # the lease outlives the probe's hard timeout by this much
 MAX_STARTUP_SPREAD_S = 60
-NOTIFY_CHANNEL = "check_events"
 
 
 def _seconds(value: Any) -> ColumnElement[Any]:
@@ -242,13 +241,7 @@ async def complete(
             )
         )
         # Delivered to listeners only if this transaction commits.
-        payload = {
-            "check_id": claim.check_id,
-            "owner_id": owner_id,
-            "state": new.state.value,
-            "rt_ms": result.response_ms,
-        }
-        await conn.execute(select(func.pg_notify(NOTIFY_CHANNEL, json.dumps(payload))))
+        await conn.execute(notify_check(claim.check_id, owner_id, new.state, result.response_ms))
     return Completion.RECORDED
 
 

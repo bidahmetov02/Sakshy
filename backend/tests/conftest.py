@@ -6,19 +6,28 @@ Probe and worker tests also need the compose `emulator` service (override: EMULA
 and email tests the compose `mailpit` service (override: MAILPIT_URL, SMTP_HOST, SMTP_PORT).
 """
 
+import asyncio
+import json
 import os
 import urllib.request
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any, cast
 
+import asyncpg  # pyright: ignore[reportMissingTypeStubs]
+import httpx2
 import pytest
 from alembic import command
 from alembic.config import Config
-from pydantic import PostgresDsn
+from fastapi import FastAPI
+from pydantic import PostgresDsn, SecretStr
 from sqlalchemy import Connection, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from api.main import create_app
 from core.db import create_engine
+from core.events import NOTIFY_CHANNEL
 from core.models import Base
 from core.settings import Settings
 from tests.mailpit import Mailpit
@@ -43,7 +52,10 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "1025"))
 @pytest.fixture(scope="session")
 def settings() -> Settings:
     return Settings(
-        database_url=PostgresDsn(TEST_DATABASE_URL), smtp_host=SMTP_HOST, smtp_port=SMTP_PORT
+        database_url=PostgresDsn(TEST_DATABASE_URL),
+        smtp_host=SMTP_HOST,
+        smtp_port=SMTP_PORT,
+        jwt_secret=SecretStr("test-only-secret-" + "x" * 32),
     )
 
 
@@ -103,3 +115,60 @@ def mailpit() -> Mailpit:
     except OSError as exc:
         pytest.fail(f"mailpit not reachable at {MAILPIT_URL}: {exc}")
     return Mailpit(MAILPIT_URL)
+
+
+@pytest.fixture
+async def listener(settings: Settings) -> AsyncGenerator[asyncio.Queue[dict[str, Any]]]:
+    """Check events (`pg_notify`) as they are committed."""
+    url = str(settings.database_url).replace("+asyncpg", "")
+    conn = await cast(Any, asyncpg).connect(url)  # asyncpg ships no type hints
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    def on_notify(_conn: Any, _pid: int, _channel: str, payload: str) -> None:
+        queue.put_nowait(json.loads(payload))
+
+    await conn.add_listener(NOTIFY_CHANNEL, on_notify)
+    yield queue
+    await conn.close()
+
+
+# ---------- API ----------
+
+PASSWORD = "correct horse battery"
+
+
+@pytest.fixture
+async def app(engine: AsyncEngine, settings: Settings) -> AsyncGenerator[FastAPI]:
+    """The API app with its lifespan running, on the emptied-after-each-test database."""
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        yield app
+
+
+def api_client(app: FastAPI) -> httpx2.AsyncClient:
+    # https, so the client sends back the Secure session cookie.
+    return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="https://test")
+
+
+@pytest.fixture
+async def anon(app: FastAPI) -> AsyncGenerator[httpx2.AsyncClient]:
+    async with api_client(app) as client:
+        yield client
+
+
+type SignIn = Callable[[str], Awaitable[httpx2.AsyncClient]]
+
+
+@pytest.fixture
+async def sign_in(app: FastAPI) -> AsyncGenerator[SignIn]:
+    """Registers a user and returns a client holding their session cookie."""
+    async with AsyncExitStack() as stack:
+
+        async def sign_in(email: str) -> httpx2.AsyncClient:
+            client = await stack.enter_async_context(api_client(app))
+            body = {"email": email, "password": PASSWORD}
+            response = await client.post("/api/auth/register", json=body)
+            assert response.status_code == 201, response.text
+            return client
+
+        yield sign_in

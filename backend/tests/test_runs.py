@@ -2,12 +2,9 @@
 incidents, outbox rows and the lock-order rule (design/sequences.md (a), (d), (f))."""
 
 import asyncio
-import json
-from collections.abc import AsyncGenerator
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any
 
-import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 import pytest
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -24,11 +21,9 @@ from core.models import (
     MonitorState,
     Notification,
 )
-from core.settings import Settings
 from tests.factories import add_check, add_group, add_user, add_window, rows, state_of
 from worker.probe import ProbeResult
 from worker.runs import (
-    NOTIFY_CHANNEL,
     Claim,
     Completion,
     claim,
@@ -432,20 +427,6 @@ async def test_completion_waits_for_a_pause_holding_the_state_lock(
 
 
 # ---------- Realtime ----------
-
-
-@pytest.fixture
-async def listener(settings: Settings) -> AsyncGenerator[asyncio.Queue[dict[str, Any]]]:
-    url = str(settings.database_url).replace("+asyncpg", "")
-    conn = await cast(Any, asyncpg).connect(url)  # asyncpg ships no type hints
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-    def on_notify(_conn: Any, _pid: int, _channel: str, payload: str) -> None:
-        queue.put_nowait(json.loads(payload))
-
-    await conn.add_listener(NOTIFY_CHANNEL, on_notify)
-    yield queue
-    await conn.close()
 
 
 async def test_completion_notifies_listeners(

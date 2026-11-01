@@ -27,13 +27,13 @@ OpenAPI spec at `/api/docs`. This page is the human-readable overview.
 | Method | Path | Body / query | Returns | Notes |
 |---|---|---|---|---|
 | GET | `/checks` | `?group_id=` | list of checks with live state | **dashboard snapshot**: config + `check_state` + open incident `started_at` |
-| POST | `/checks` | `{name, url, interval_s, timeout_s, expected_status, expected_body?, group_id?, alert_emails[]}` | 201 check | `timeout_s` at most 30 s (bounds the time to confirm DOWN, see `state-machine.md`). `alert_emails` required; the UI pre-fills the account email. Used only while ungrouped: a group's list replaces it. Responses include `effective_alert_emails` so the UI can show who actually gets alerted. |
+| POST | `/checks` | `{name, url, interval_s, timeout_s, expected_status, expected_body?, group_id?, alert_emails[]}` | 201 check | `timeout_s` at most 30 s (bounds the time to confirm DOWN, see `state-machine.md`). `alert_emails` required; the UI pre-fills the account email. Used only while ungrouped: a group's list replaces it. Responses include `effective_alert_emails` so the UI can show who actually gets alerted. A `group_id` that isn't the user's is 422. |
 | GET | `/checks/{id}` | none | check with live state | |
-| PATCH | `/checks/{id}` | any config fields | check | state is kept; an interval change recomputes `next_run_at` |
+| PATCH | `/checks/{id}` | any config fields | check | state is kept; an interval change shifts `next_run_at` by the difference (`max(now, next_run_at − old + new)`, so the schedule stays anchored), except while a run holds the lease or a retry streak is under way |
 | DELETE | `/checks/{id}` | none | 204 | soft delete; closes an open incident (`check_deleted`) |
-| POST | `/checks/{id}/pause` | none | 204 | closes an open incident (`paused`), no UP email |
-| POST | `/checks/{id}/resume` | none | 204 | state `pending`, runs right away |
-| POST | `/checks/{id}/run` | none | 202, or **409** if currently running | sets `next_run_at = now()` |
+| POST | `/checks/{id}/pause` | none | 204 | closes an open incident (`paused`), no UP email; idempotent |
+| POST | `/checks/{id}/resume` | none | 204 | state `pending`, runs right away; idempotent |
+| POST | `/checks/{id}/run` | none | 202, or **409** if currently running or paused | sets `next_run_at = now()` |
 
 ## History and incidents
 
@@ -100,4 +100,4 @@ data: {"id": 9, "check_id": 17, "started_at": "...", "ended_at": null}
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/health` | `{"db": "ok", "worker_last_seen_s": 4}`, which also shows whether monitoring itself is alive |
+| GET | `/health` | `{"db": "ok", "worker_last_seen_s": 4}`, which also shows whether monitoring itself is alive. `worker_last_seen_s` is null with no worker heartbeat; 503 with `"db": "error"` if the database is unreachable |

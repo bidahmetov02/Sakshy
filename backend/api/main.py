@@ -1,27 +1,18 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI, Request
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from fastapi import APIRouter, FastAPI
 
+from api.routes import auth, checks, health
+from api.security import check_secret
 from core.db import create_engine
 from core.log import configure_logging
 from core.settings import Settings, get_settings
 
-router = APIRouter(prefix="/api")
-
-
-@router.get("/health")
-async def health(request: Request) -> dict[str, str]:
-    engine: AsyncEngine = request.app.state.engine
-    async with engine.connect() as conn:
-        await conn.execute(text("SELECT 1"))
-    return {"db": "ok"}
-
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    check_secret(settings)  # refuse to start without a usable JWT secret
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -37,5 +28,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url="/api/openapi.json",
     )
-    app.include_router(router)
+    app.state.settings = settings
+    api = APIRouter(prefix="/api")
+    for module in (auth, checks, health):
+        api.include_router(module.router)
+    app.include_router(api)
     return app
