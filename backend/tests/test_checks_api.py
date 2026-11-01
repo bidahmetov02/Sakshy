@@ -19,44 +19,12 @@ from core.models import (
     MonitorState,
     Notification,
 )
-from tests.conftest import SignIn
-from tests.factories import add_group, add_incident, rows, state_of
+from tests.conftest import CHECK, create_check, user_id
+from tests.factories import add_group, add_incident, rows, sql, state_of
 from worker.probe import ProbeResult
 from worker.runs import Completion, claim, complete
 
-CHECK: dict[str, Any] = {
-    "name": "site",
-    "url": "https://example.com/health",
-    "interval_s": 60,
-    "timeout_s": 10,
-    "alert_emails": ["alice@x.io"],
-}
 OK = ProbeResult(ok=True, response_ms=120, status_code=200)
-
-
-@pytest.fixture
-async def alice(sign_in: SignIn) -> httpx2.AsyncClient:
-    return await sign_in("alice@x.io")
-
-
-@pytest.fixture
-async def bob(sign_in: SignIn) -> httpx2.AsyncClient:
-    return await sign_in("bob@x.io")
-
-
-async def user_id(client: httpx2.AsyncClient) -> int:
-    return (await client.get("/api/auth/me")).json()["id"]
-
-
-async def create(client: httpx2.AsyncClient, **overrides: Any) -> dict[str, Any]:
-    response = await client.post("/api/checks", json=CHECK | overrides)
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-async def sql(engine: AsyncEngine, statement: str, **params: Any) -> None:
-    async with engine.begin() as conn:
-        await conn.execute(text(statement), params)
 
 
 async def due_in(engine: AsyncEngine, check_id: int) -> float:
@@ -74,7 +42,7 @@ async def due_in(engine: AsyncEngine, check_id: int) -> float:
 async def test_create_returns_the_check_with_live_state(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
 
     volatile = {"id", "created_at", "updated_at", "state_changed_at", "next_run_at"}
     assert {k: v for k, v in check.items() if k not in volatile} == CHECK | {
@@ -92,6 +60,7 @@ async def test_create_returns_the_check_with_live_state(
         "last_error_kind": None,
         "last_error_message": None,
         "incident_started_at": None,
+        "in_maintenance": False,
     }
     assert await due_in(engine, check["id"]) <= 0  # first run right away
     assert (await alice.get(f"/api/checks/{check['id']}")).json() == check
@@ -101,14 +70,14 @@ async def test_grouped_check_alerts_the_groups_emails(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
     group_id = await add_group(engine, await user_id(alice), alert_emails=["ops@x.io"])
-    check = await create(alice, group_id=group_id)
+    check = await create_check(alice, group_id=group_id)
 
     assert check["alert_emails"] == ["alice@x.io"]
     assert check["effective_alert_emails"] == ["ops@x.io"]
 
 
 async def test_alert_emails_are_deduplicated_ignoring_case(alice: httpx2.AsyncClient) -> None:
-    check = await create(alice, alert_emails=["a@x.io", "b@x.io", "A@x.io"])
+    check = await create_check(alice, alert_emails=["a@x.io", "b@x.io", "A@x.io"])
     assert check["alert_emails"] == ["a@x.io", "b@x.io"]
 
 
@@ -152,11 +121,11 @@ async def test_list_shows_own_live_checks_with_open_incident(
     engine: AsyncEngine, alice: httpx2.AsyncClient, bob: httpx2.AsyncClient
 ) -> None:
     group_id = await add_group(engine, await user_id(alice))
-    first = await create(alice, name="first")
-    second = await create(alice, name="second", group_id=group_id)
-    deleted = await create(alice, name="deleted")
+    first = await create_check(alice, name="first")
+    second = await create_check(alice, name="second", group_id=group_id)
+    deleted = await create_check(alice, name="deleted")
     await alice.delete(f"/api/checks/{deleted['id']}")
-    await create(bob, name="bob's")
+    await create_check(bob, name="bob's")
     await add_incident(engine, first["id"])
     await sql(engine, "UPDATE check_state SET state = 'down' WHERE check_id = :id", id=first["id"])
 
@@ -192,7 +161,7 @@ async def test_another_users_check_is_404(
     path: str,
     body: dict[str, Any] | None,
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
 
     response = await bob.request(method, f"/api/checks/{check['id']}{path}", json=body)
 
@@ -203,7 +172,7 @@ async def test_another_users_check_is_404(
 
 
 async def test_deleted_check_is_404(alice: httpx2.AsyncClient) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     assert (await alice.delete(f"/api/checks/{check['id']}")).status_code == 204
 
     for method, path in [("GET", ""), ("DELETE", ""), ("POST", "/pause"), ("POST", "/run")]:
@@ -217,7 +186,7 @@ async def test_deleted_check_is_404(alice: httpx2.AsyncClient) -> None:
 async def test_patch_changes_config_and_keeps_state(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     await add_incident(engine, check["id"])
     await sql(engine, "UPDATE check_state SET state = 'down' WHERE check_id = :id", id=check["id"])
 
@@ -237,7 +206,7 @@ async def test_patch_changes_config_and_keeps_state(
 
 
 async def test_patch_validates_the_merged_config(alice: httpx2.AsyncClient) -> None:
-    check = await create(alice, interval_s=60, timeout_s=10)
+    check = await create_check(alice, interval_s=60, timeout_s=10)
     path = f"/api/checks/{check['id']}"
 
     assert (await alice.patch(path, json={"interval_s": 30, "timeout_s": 30})).status_code == 422
@@ -251,7 +220,7 @@ async def test_patch_moves_between_groups_and_ungroups(
 ) -> None:
     group_id = await add_group(engine, await user_id(alice), alert_emails=["ops@x.io"])
     bobs_group = await add_group(engine, await user_id(bob))
-    check = await create(alice)
+    check = await create_check(alice)
     path = f"/api/checks/{check['id']}"
 
     grouped = (await alice.patch(path, json={"group_id": group_id})).json()
@@ -272,7 +241,7 @@ async def test_patch_moves_between_groups_and_ungroups(
 async def test_interval_change_shifts_next_run(
     engine: AsyncEngine, alice: httpx2.AsyncClient, due: int, new_interval: int, expected: int
 ) -> None:
-    check = await create(alice, interval_s=60, timeout_s=5)
+    check = await create_check(alice, interval_s=60, timeout_s=5)
     await sql(
         engine,
         "UPDATE check_state SET next_run_at = now() + make_interval(secs => :s)"
@@ -296,7 +265,7 @@ async def test_interval_change_shifts_next_run(
 async def test_interval_change_leaves_running_or_retrying_checks_alone(
     engine: AsyncEngine, alice: httpx2.AsyncClient, runtime: str
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     await sql(
         engine,
         f"UPDATE check_state SET next_run_at = now() + interval '50 s', {runtime}"
@@ -315,7 +284,7 @@ async def test_interval_change_leaves_running_or_retrying_checks_alone(
 async def test_pause_ends_the_incident_without_an_up_email(
     engine: AsyncEngine, alice: httpx2.AsyncClient, listener: asyncio.Queue[dict[str, Any]]
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     await add_incident(engine, check["id"])
     await sql(
         engine,
@@ -349,7 +318,7 @@ async def test_pause_ends_the_incident_without_an_up_email(
 async def test_pause_and_resume_are_idempotent(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     path = f"/api/checks/{check['id']}"
 
     assert (await alice.post(f"{path}/resume")).status_code == 204  # not paused: no-op
@@ -372,7 +341,7 @@ async def test_pause_and_resume_are_idempotent(
 async def test_delete_soft_deletes_and_ends_the_incident(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     await add_incident(engine, check["id"])
 
     assert (await alice.delete(f"/api/checks/{check['id']}")).status_code == 204
@@ -388,7 +357,7 @@ async def test_delete_soft_deletes_and_ends_the_incident(
 async def test_pause_discards_a_run_in_flight(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     [c] = await claim(engine, "w1", 10)
 
     await alice.post(f"/api/checks/{check['id']}/pause")
@@ -402,7 +371,7 @@ async def test_pause_waiting_on_a_completion_closes_the_incident_it_opened(
 ) -> None:
     """The worker locks first and opens an incident; the pause, blocked on the lock, sees
     it once the worker commits and closes it."""
-    check = await create(alice)
+    check = await create_check(alice)
     async with engine.connect() as worker:
         tx = await worker.begin()
         await worker.execute(
@@ -436,7 +405,7 @@ async def test_pause_waiting_on_a_completion_closes_the_incident_it_opened(
 
 
 async def test_run_makes_the_check_due_now(engine: AsyncEngine, alice: httpx2.AsyncClient) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     await sql(
         engine,
         "UPDATE check_state SET next_run_at = now() + interval '1 hour' WHERE check_id = :id",
@@ -452,7 +421,7 @@ async def test_run_makes_the_check_due_now(engine: AsyncEngine, alice: httpx2.As
 async def test_run_conflicts_while_running_or_paused(
     engine: AsyncEngine, alice: httpx2.AsyncClient
 ) -> None:
-    check = await create(alice)
+    check = await create_check(alice)
     path = f"/api/checks/{check['id']}"
     await claim(engine, "w1", 10)
 

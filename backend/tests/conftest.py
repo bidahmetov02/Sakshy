@@ -172,3 +172,32 @@ async def sign_in(app: FastAPI) -> AsyncGenerator[SignIn]:
             return client
 
         yield sign_in
+
+
+@pytest.fixture
+async def alice(sign_in: SignIn) -> httpx2.AsyncClient:
+    return await sign_in("alice@x.io")
+
+
+@pytest.fixture
+async def bob(sign_in: SignIn) -> httpx2.AsyncClient:
+    return await sign_in("bob@x.io")
+
+
+async def user_id(client: httpx2.AsyncClient) -> int:
+    return (await client.get("/api/auth/me")).json()["id"]
+
+
+CHECK: dict[str, Any] = {
+    "name": "site",
+    "url": "https://example.com/health",
+    "interval_s": 60,
+    "timeout_s": 10,
+    "alert_emails": ["alice@x.io"],
+}
+
+
+async def create_check(client: httpx2.AsyncClient, **overrides: Any) -> dict[str, Any]:
+    response = await client.post("/api/checks", json=CHECK | overrides)
+    assert response.status_code == 201, response.text
+    return response.json()

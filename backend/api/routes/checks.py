@@ -16,11 +16,23 @@ from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import Session, UserId
-from api.schemas import CheckIn, CheckOut, CheckPatch
+from api.queries import (
+    Limit,
+    RangeQuery,
+    check_not_found,
+    decode_cursor,
+    encode_cursor,
+    hold_group,
+    in_maintenance,
+    require_check,
+    stats,
+)
+from api.schemas import CheckIn, CheckOut, CheckPatch, Page, ResultOut, Stats
 from core.events import notify_check
 from core.models import (
     Check,
     CheckGroup,
+    CheckResult,
     CheckState,
     Incident,
     IncidentEndReason,
@@ -32,14 +44,16 @@ router = APIRouter(prefix="/checks", tags=["checks"])
 _lease_free = or_(CheckState.lease_until.is_(None), CheckState.lease_until < func.now())
 
 
-def _not_found() -> HTTPException:
-    return HTTPException(status.HTTP_404_NOT_FOUND, "check not found")
-
-
-def _snapshot(user_id: int) -> Select[Check, CheckState, list[str], datetime]:
+def _snapshot(user_id: int) -> Select[Check, CheckState, list[str], datetime, bool]:
     """Columns from the outer joins (group emails, open incident start) can be null."""
     return (
-        select(Check, CheckState, CheckGroup.alert_emails, Incident.started_at)
+        select(
+            Check,
+            CheckState,
+            CheckGroup.alert_emails,
+            Incident.started_at,
+            in_maintenance().label("in_maintenance"),
+        )
         .join(CheckState, CheckState.check_id == Check.id)
         .outerjoin(CheckGroup, CheckGroup.id == Check.group_id)
         .outerjoin(Incident, and_(Incident.check_id == Check.id, Incident.ended_at.is_(None)))
@@ -48,7 +62,11 @@ def _snapshot(user_id: int) -> Select[Check, CheckState, list[str], datetime]:
 
 
 def _out(
-    check: Check, state: CheckState, group_emails: list[str] | None, incident_started_at: Any
+    check: Check,
+    state: CheckState,
+    group_emails: list[str] | None,
+    incident_started_at: Any,
+    in_maintenance: bool,
 ) -> CheckOut:
     return CheckOut(
         id=check.id,
@@ -74,6 +92,7 @@ def _out(
         last_error_kind=state.last_error_kind,
         last_error_message=state.last_error_message,
         incident_started_at=incident_started_at,
+        in_maintenance=in_maintenance,
     )
 
 
@@ -81,7 +100,7 @@ async def _get(session: AsyncSession, user_id: int, check_id: int) -> CheckOut:
     stmt = _snapshot(user_id).where(Check.id == check_id)
     row = (await session.execute(stmt.execution_options(populate_existing=True))).one_or_none()
     if row is None:
-        raise _not_found()
+        raise check_not_found()
     return _out(*row)
 
 
@@ -98,7 +117,7 @@ async def _lock(session: AsyncSession, user_id: int, check_id: int) -> tuple[Che
         )
     ).one_or_none()
     if state is None:
-        raise _not_found()
+        raise check_not_found()
     check = (
         await session.scalars(
             select(Check)
@@ -107,23 +126,8 @@ async def _lock(session: AsyncSession, user_id: int, check_id: int) -> tuple[Che
         )
     ).one_or_none()
     if check is None:
-        raise _not_found()
+        raise check_not_found()
     return check, state
-
-
-async def _hold_group(session: AsyncSession, user_id: int, group_id: int) -> None:
-    """422 unless the group is the user's. KEY SHARE keeps it from being deleted before
-    this transaction commits."""
-    found = (
-        await session.execute(
-            select(CheckGroup.id)
-            .where(CheckGroup.id == group_id, CheckGroup.owner_id == user_id)
-            .with_for_update(key_share=True)
-        )
-    ).one_or_none()
-    if found is None:
-        error = {"type": "value_error", "loc": ("body", "group_id"), "msg": "group not found"}
-        raise RequestValidationError([error | {"input": group_id}])
 
 
 def _config(body: CheckIn) -> dict[str, Any]:
@@ -168,7 +172,7 @@ async def list_checks(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_check(body: CheckIn, user_id: UserId, session: Session) -> CheckOut:
     if body.group_id is not None:
-        await _hold_group(session, user_id, body.group_id)
+        await hold_group(session, user_id, body.group_id)
     check = Check(owner_id=user_id, **_config(body))
     session.add(check)
     await session.flush()
@@ -205,7 +209,7 @@ async def update_check(
         errors = exc.errors(include_url=False, include_context=False)
         raise RequestValidationError([e | {"loc": ("body", *e["loc"])} for e in errors]) from None
     if merged.group_id is not None and merged.group_id != check.group_id:
-        await _hold_group(session, user_id, merged.group_id)
+        await hold_group(session, user_id, merged.group_id)
 
     old_interval = check.interval_s
     for field, value in _config(merged).items():
@@ -277,7 +281,7 @@ async def run_check(check_id: int, user_id: UserId, session: Session) -> Respons
         )
     ).scalar_one_or_none()
     if paused is None:
-        raise _not_found()
+        raise check_not_found()
     if paused:
         raise HTTPException(status.HTTP_409_CONFLICT, "check is paused")
     made_due = (
@@ -292,3 +296,32 @@ async def run_check(check_id: int, user_id: UserId, session: Session) -> Respons
         raise HTTPException(status.HTTP_409_CONFLICT, "check is running")
     await session.commit()
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+# ---------- History ----------
+
+
+@router.get("/{check_id}/stats")
+async def check_stats(
+    check_id: int, user_id: UserId, session: Session, range_: RangeQuery = "day"
+) -> Stats:
+    """Chart buckets with gaps: the day from raw results in 5-minute slots, the week and
+    month from hourly rollups. Retries are not counted."""
+    await require_check(session, user_id, check_id)
+    return await stats(session, check_id, range_)
+
+
+@router.get("/{check_id}/results")
+async def check_results(
+    check_id: int, user_id: UserId, session: Session, limit: Limit = 50, cursor: str | None = None
+) -> Page[ResultOut]:
+    """Raw results, newest first, retries included. Kept for 7 days."""
+    await require_check(session, user_id, check_id)
+    r = CheckResult
+    stmt = select(r).where(r.check_id == check_id).order_by(r.checked_at.desc()).limit(limit + 1)
+    if cursor is not None:
+        stmt = stmt.where(r.checked_at < decode_cursor(cursor)[0])
+    results = list((await session.scalars(stmt)).all())
+    items = [ResultOut.model_validate(r, from_attributes=True) for r in results[:limit]]
+    more = len(results) > limit
+    return Page(items=items, next_cursor=encode_cursor(items[-1].checked_at) if more else None)

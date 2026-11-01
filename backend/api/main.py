@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from api.routes import auth, checks, health
+from api.routes import auth, checks, groups, health, incidents, maintenance, public, status_pages
 from api.security import check_secret
 from core.db import create_engine
 from core.log import configure_logging
@@ -30,7 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     api = APIRouter(prefix="/api")
-    for module in (auth, checks, health):
+    for module in (auth, checks, groups, maintenance, incidents, status_pages, public, health):
         api.include_router(module.router)
     app.include_router(api)
     return app

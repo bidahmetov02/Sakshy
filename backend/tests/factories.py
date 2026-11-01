@@ -11,7 +11,9 @@ from core.models import (
     AlertKind,
     Check,
     CheckGroup,
+    CheckResult,
     CheckState,
+    CheckStatsHourly,
     ErrorKind,
     Incident,
     MaintenanceWindow,
@@ -101,3 +103,51 @@ async def add_notification(
             .returning(Notification.id)
         )
         return (await conn.execute(stmt)).scalar_one()
+
+
+async def sql(engine: AsyncEngine, statement: str, **params: Any) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text(statement), params)
+
+
+async def add_result(
+    engine: AsyncEngine,
+    check_id: int,
+    at: str = "now()",
+    *,
+    ok: bool = True,
+    response_ms: int | None = 100,
+    is_retry: bool = False,
+) -> None:
+    """A raw result at `at`, an SQL timestamp expression."""
+    values = {
+        "check_id": check_id,
+        "checked_at": text(at),
+        "ok": ok,
+        "response_ms": response_ms,
+        "is_retry": is_retry,
+    }
+    async with engine.begin() as conn:
+        await conn.execute(insert(CheckResult).values(values))
+
+
+async def add_rollup(
+    engine: AsyncEngine, check_id: int, hours_ago: int, total: int, ok: int, rt_ms: list[int]
+) -> None:
+    """The hourly rollup `hours_ago` hours before the current (UTC) hour."""
+    bucket = text(
+        f"date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"
+        f" - interval '{hours_ago} hours'"
+    )
+    values = {
+        "check_id": check_id,
+        "bucket": bucket,
+        "total": total,
+        "ok": ok,
+        "rt_count": len(rt_ms),
+        "rt_sum_ms": sum(rt_ms),
+        "rt_min_ms": min(rt_ms, default=None),
+        "rt_max_ms": max(rt_ms, default=None),
+    }
+    async with engine.begin() as conn:
+        await conn.execute(insert(CheckStatsHourly).values(values))
