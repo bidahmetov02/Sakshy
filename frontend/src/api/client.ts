@@ -12,6 +12,18 @@ export type Result = Schemas['ResultOut']
 export type Incident = Schemas['IncidentOut']
 export type User = Schemas['UserOut']
 export type Health = Schemas['Health']
+export type GroupIn = Schemas['GroupIn']
+export type GroupStatus = Group['status']
+export type MaintenanceWindow = Schemas['MaintenanceOut']
+export type MaintenanceIn = Schemas['MaintenanceIn']
+export type MaintenancePatch = Schemas['MaintenancePatch']
+export type StatusPage = Schemas['StatusPageOut']
+export type StatusPageIn = Schemas['StatusPageIn']
+export type StatusPagePatch = Schemas['StatusPagePatch']
+export type StatusPageItemIn = Schemas['ItemIn']
+export type PublicPage = Schemas['PublicPage']
+export type PublicItem = Schemas['PublicItem']
+export type PublicIncident = Schemas['PublicIncident']
 export type Range = 'day' | 'week' | 'month'
 
 /** A non-2xx response. `detail` is FastAPI's: a message, or a list of validation errors. */

@@ -14,7 +14,15 @@ import { AuthPage } from './pages/AuthPage'
 import { CheckDetail } from './pages/CheckDetail'
 import { EditCheck, NewCheck } from './pages/CheckFormPage'
 import { Dashboard } from './pages/Dashboard'
+import { GroupDetail } from './pages/GroupDetail'
+import { EditGroup, NewGroup } from './pages/GroupFormPage'
+import { GroupsPage } from './pages/GroupsPage'
+import { EditWindow, NewWindow } from './pages/MaintenanceFormPage'
+import { MaintenancePage } from './pages/MaintenancePage'
 import { NotFound } from './pages/NotFound'
+import { PublicStatusPage } from './pages/PublicStatusPage'
+import { StatusPageEditor } from './pages/StatusPageEditor'
+import { NewStatusPage, StatusPagesPage } from './pages/StatusPagesPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +46,7 @@ createRoot(document.getElementById('root')!).render(
         <Routes>
           <Route path="/login" element={<AuthPage key="login" mode="login" />} />
           <Route path="/signup" element={<AuthPage key="signup" mode="signup" />} />
+          <Route path="/status/:slug" element={<PublicStatusPage />} />
           <Route
             element={
               <RequireAuth>
@@ -49,6 +58,16 @@ createRoot(document.getElementById('root')!).render(
             <Route path="checks/new" element={<NewCheck />} />
             <Route path="checks/:id" element={<CheckDetail />} />
             <Route path="checks/:id/edit" element={<EditCheck />} />
+            <Route path="groups" element={<GroupsPage />} />
+            <Route path="groups/new" element={<NewGroup />} />
+            <Route path="groups/:id" element={<GroupDetail />} />
+            <Route path="groups/:id/edit" element={<EditGroup />} />
+            <Route path="maintenance" element={<MaintenancePage />} />
+            <Route path="maintenance/new" element={<NewWindow />} />
+            <Route path="maintenance/:id/edit" element={<EditWindow />} />
+            <Route path="status-pages" element={<StatusPagesPage />} />
+            <Route path="status-pages/new" element={<NewStatusPage />} />
+            <Route path="status-pages/:id" element={<StatusPageEditor />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

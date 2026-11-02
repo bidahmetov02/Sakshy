@@ -1,14 +1,60 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Link, NavLink, Outlet, useNavigate } from 'react-router'
+import { useEffect, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { api } from '../api/client'
+import { useLiveUpdates } from '../api/live'
 import { useHealth, useMe } from '../api/queries'
 import { formatDuration } from '../lib/format'
+import { Footer } from './Footer'
 
 /** A worker heartbeat older than this means checks aren't running. */
 const STALE_WORKER_S = 60
 
-const YEAR = new Date().getFullYear()
+const NAV = [
+  ['/', 'Checks'],
+  ['/groups', 'Groups'],
+  ['/maintenance', 'Maintenance'],
+  ['/status-pages', 'Status pages'],
+] as const
+
+function Nav() {
+  // A check's own pages belong to Checks, which is the index route.
+  const onCheck = useLocation().pathname.startsWith('/checks')
+  return (
+    <nav className="nav" aria-label="Main">
+      {NAV.map(([to, label]) => (
+        <NavLink
+          key={to}
+          to={to}
+          end={to === '/'}
+          className={({ isActive }) => `nav-link${isActive || (to === '/' && onCheck) ? ' active' : ''}`}
+        >
+          {label}
+        </NavLink>
+      ))}
+    </nav>
+  )
+}
+
+/** Nothing while live; a quiet note when the stream has been down for a moment. */
+function LiveIndicator() {
+  const status = useLiveUpdates()
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    if (status !== 'reconnecting') return
+    const timer = setTimeout(() => setLate(true), 3000)
+    return () => {
+      clearTimeout(timer)
+      setLate(false)
+    }
+  }, [status])
+  if (!late) return null
+  return (
+    <span className="live-note" role="status">
+      Reconnecting…
+    </span>
+  )
+}
 
 export function Shell() {
   return (
@@ -18,11 +64,8 @@ export function Shell() {
           <Link to="/" className="wordmark">
             Sakshy
           </Link>
-          <nav className="nav" aria-label="Main">
-            <NavLink to="/" end className="nav-link">
-              Checks
-            </NavLink>
-          </nav>
+          <Nav />
+          <LiveIndicator />
           <Account />
         </div>
       </header>
@@ -30,12 +73,7 @@ export function Shell() {
       <main className="page">
         <Outlet />
       </main>
-      <footer className="footer">
-        <div className="footer-inner">
-          <p>© {YEAR}. Developed by Bekzhan Bidakhmetov</p>
-          <a href="mailto:bidahmetov2002@gmail.com">bidahmetov2002@gmail.com</a>
-        </div>
-      </footer>
+      <Footer />
     </div>
   )
 }

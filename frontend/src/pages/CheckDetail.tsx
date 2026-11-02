@@ -1,19 +1,19 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { ApiError, type Check, type Range } from '../api/client'
 import {
-  keys,
   useCheck,
   useCheckAction,
   useDeleteCheck,
   useGroups,
   useIncidents,
+  useMaintenance,
   useResults,
   useStats,
   type CheckAction,
 } from '../api/queries'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { MaintenanceNote } from '../components/MaintenanceNote'
 import { ResponseChart } from '../components/ResponseChart'
 import { StateGlyph } from '../components/StateGlyph'
 import { averageMs, toSlots } from '../lib/chart'
@@ -29,28 +29,10 @@ const RANGES: { value: Range; label: string }[] = [
   { value: 'month', label: '30 days' },
 ]
 
-/** After "Run now", poll briefly until the run lands. Live updates replace this later. */
-const WATCH_MS = 45_000
-
 export function CheckDetail() {
   const id = Number(useParams().id)
-  const [watchUntil, setWatchUntil] = useState(0)
   const now = useNow(1000)
-  const watching = watchUntil > now
-  const check = useCheck(id, watching ? 2000 : false)
-  const qc = useQueryClient()
-
-  // A new run changes the history too.
-  const lastRun = check.data?.last_checked_at
-  const seenRun = useRef(lastRun)
-  useEffect(() => {
-    if (seenRun.current === lastRun) return
-    seenRun.current = lastRun
-    void qc.invalidateQueries({ queryKey: keys.results(id) })
-    void qc.invalidateQueries({ queryKey: ['stats', id] })
-    void qc.invalidateQueries({ queryKey: keys.incidents(id) })
-    setWatchUntil(0)
-  }, [lastRun, id, qc])
+  const check = useCheck(id)
 
   if (!Number.isInteger(id)) return <NotFound what="check" />
   if (check.isPending) return <p className="muted">Loading…</p>
@@ -72,17 +54,17 @@ export function CheckDetail() {
             {c.url}
           </a>
         </div>
-        <Actions check={c} onRun={() => setWatchUntil(Date.now() + WATCH_MS)} />
+        <Actions check={c} />
       </header>
 
       <section className={`status-line row-${displayState(c)}`} aria-live="polite">
         <StateGlyph state={displayState(c)} />
         <p>
           {statusSentence(c, now)}
-          {c.in_maintenance && ' In maintenance, so down alerts are held back.'}
-          {!c.is_paused && c.state !== 'pending' && <NextRun at={c.next_run_at} now={now} watching={watching} />}
+          {!c.is_paused && c.state !== 'pending' && <NextRun at={c.next_run_at} now={now} />}
         </p>
       </section>
+      <CheckMaintenance check={c} now={now} />
 
       <History check={c} />
       <Incidents checkId={c.id} now={now} />
@@ -92,12 +74,12 @@ export function CheckDetail() {
   )
 }
 
-function NextRun({ at, now, watching }: { at: string; now: number; watching: boolean }) {
+function NextRun({ at, now }: { at: string; now: number }) {
   const ms = Date.parse(at) - now
-  return <span className="muted"> {watching || ms <= 0 ? 'Checking now…' : `Next check in ${formatDuration(ms)}.`}</span>
+  return <span className="muted"> {ms <= 0 ? 'Checking now…' : `Next check in ${formatDuration(ms)}.`}</span>
 }
 
-function Actions({ check, onRun }: { check: Check; onRun: () => void }) {
+function Actions({ check }: { check: Check }) {
   const action = useCheckAction(check.id)
   const remove = useDeleteCheck(check.id)
   const navigate = useNavigate()
@@ -108,7 +90,6 @@ function Actions({ check, onRun }: { check: Check; onRun: () => void }) {
     setMessage(null)
     try {
       await action.mutateAsync(kind)
-      if (kind === 'run' || kind === 'resume') onRun()
       setConfirm(null)
     } catch (e) {
       setMessage(
@@ -373,7 +354,9 @@ function Settings({ check }: { check: Check }) {
         {check.group_id && (
           <>
             <dt>Group</dt>
-            <dd>{group?.name ?? '…'}</dd>
+            <dd>
+              <Link to={`/groups/${check.group_id}`}>{group?.name ?? 'Group'}</Link>
+            </dd>
           </>
         )}
         <dt>Alerts go to</dt>
@@ -381,7 +364,19 @@ function Settings({ check }: { check: Check }) {
           {check.effective_alert_emails.join(', ')}
           {check.group_id && <span className="muted"> (the group's list)</span>}
         </dd>
+        <dt>Maintenance</dt>
+        <dd>
+          <Link to={`/maintenance/new?target=c:${check.id}`}>Schedule maintenance</Link>
+        </dd>
       </dl>
     </section>
   )
+}
+
+/** Windows on the check itself or on its group. */
+function CheckMaintenance({ check, now }: { check: Check; now: number }) {
+  const windows = useMaintenance()
+  const covering =
+    windows.data?.filter((w) => w.check_id === check.id || (check.group_id && w.group_id === check.group_id)) ?? []
+  return <MaintenanceNote windows={covering} now={now} />
 }

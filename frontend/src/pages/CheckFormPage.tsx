@@ -1,4 +1,5 @@
-import { cloneElement, isValidElement, useState, type FormEvent, type ReactElement, type ReactNode } from 'react'
+import { useState, type FormEvent } from 'react'
+import { Field } from '../components/Field'
 import { Link, useNavigate, useParams } from 'react-router'
 import type { Check, CheckIn, Group } from '../api/client'
 import { useCheck, useCreateCheck, useGroups, useMe, useUpdateCheck } from '../api/queries'
@@ -226,67 +227,4 @@ function GroupRecipients({ group }: { group: Group }) {
       used only when it isn't in a group.
     </>
   )
-}
-
-function Field({
-  id,
-  label,
-  unit,
-  optional,
-  hint,
-  error,
-  children,
-}: {
-  id: string
-  label: string
-  unit?: string
-  optional?: boolean
-  hint?: ReactNode
-  error?: string
-  children: ReactNode
-}) {
-  const inputId = `f-${id}`
-  const describedBy = [hint && `${inputId}-hint`, error && `${inputId}-error`].filter(Boolean).join(' ') || undefined
-  return (
-    <div className={`field${error ? ' has-error' : ''}`}>
-      <label htmlFor={inputId}>
-        {label}
-        {unit && <span className="label-aside"> ({unit})</span>}
-        {optional && <span className="label-aside"> (optional)</span>}
-      </label>
-      <FieldControl id={inputId} describedBy={describedBy} invalid={!!error}>
-        {children}
-      </FieldControl>
-      {hint && (
-        <p className="field-hint" id={`${inputId}-hint`}>
-          {hint}
-        </p>
-      )}
-      {error && (
-        <p className="field-error" id={`${inputId}-error`}>
-          {error}
-        </p>
-      )}
-    </div>
-  )
-}
-
-/** Wires the label, hint and error to the one control inside a Field. */
-function FieldControl({
-  id,
-  describedBy,
-  invalid,
-  children,
-}: {
-  id: string
-  describedBy?: string
-  invalid: boolean
-  children: ReactNode
-}) {
-  if (!isValidElement(children)) return children
-  return cloneElement(children as ReactElement<Record<string, unknown>>, {
-    id,
-    'aria-describedby': describedBy,
-    'aria-invalid': invalid || undefined,
-  })
 }

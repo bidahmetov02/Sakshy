@@ -1,10 +1,7 @@
 import { Link, useSearchParams } from 'react-router'
-import type { Check } from '../api/client'
 import { useChecks, useGroups } from '../api/queries'
-import { StateGlyph } from '../components/StateGlyph'
-import { displayState, sortChecks, stateSince, summarize } from '../lib/checks'
+import { CheckList, Summary } from '../components/CheckList'
 import { errorMessage } from '../lib/errors'
-import { formatMs } from '../lib/format'
 import { useNow } from '../lib/useNow'
 
 export function Dashboard() {
@@ -18,16 +15,11 @@ export function Dashboard() {
   if (checks.isPending) return <p className="muted">Loading checks…</p>
   if (checks.isError) return <p className="form-error">{errorMessage(checks.error)}</p>
 
-  const summary = summarize(checks.data)
-  const sorted = sortChecks(checks.data)
-  const groupName = new Map(groups.data?.map((g) => [g.id, g.name]))
+  const groupNames = groupId ? undefined : new Map(groups.data?.map((g) => [g.id, g.name]))
 
   return (
     <>
-      <section className="summary" aria-live="polite">
-        <h1 className={`summary-headline tone-${summary.tone}`}>{summary.headline}</h1>
-        {summary.detail && <p className="summary-detail">{summary.detail}</p>}
-      </section>
+      <Summary checks={checks.data} />
 
       <div className="toolbar">
         {!!groups.data?.length && (
@@ -51,40 +43,11 @@ export function Dashboard() {
         </Link>
       </div>
 
-      {sorted.length > 0 ? (
-        <ul className="check-list">
-          {sorted.map((check) => (
-            <CheckRow
-              key={check.id}
-              check={check}
-              now={now}
-              group={!groupId && check.group_id ? groupName.get(check.group_id) : undefined}
-            />
-          ))}
-        </ul>
+      {checks.data.length > 0 ? (
+        <CheckList checks={checks.data} now={now} groupNames={groupNames} />
       ) : (
         groupId && <p className="muted empty">This group has no checks yet.</p>
       )}
     </>
-  )
-}
-
-function CheckRow({ check, now, group }: { check: Check; now: number; group?: string }) {
-  const state = displayState(check)
-  const showMs = (state === 'up' || state === 'failing') && check.last_response_ms != null
-  return (
-    <li className={`check-row row-${state}`}>
-      <Link to={`/checks/${check.id}`} className="check-link">
-        <StateGlyph state={state} />
-        <span className="check-name">
-          {check.name}
-          {check.in_maintenance && <span className="tag tag-maint">Maintenance</span>}
-          {group && <span className="tag">{group}</span>}
-        </span>
-        <span className="check-url">{check.url}</span>
-        <span className="check-ms">{showMs ? formatMs(check.last_response_ms) : ''}</span>
-        <span className="check-since">{stateSince(check, now)}</span>
-      </Link>
-    </li>
   )
 }
