@@ -8,7 +8,7 @@ down and when it recovers.
 You need Docker with Compose v2. Ports 8080, 8000, 8025, 9000, 5432 and 1025 must be free.
 
 ```sh
-git clone <repo-url> sakshy
+git clone git@github.com:bidahmetov02/Sakshy.git sakshy
 cd sakshy
 docker compose up -d --build
 ```
