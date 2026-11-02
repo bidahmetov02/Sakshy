@@ -28,7 +28,7 @@ def _not_found() -> HTTPException:
     return HTTPException(status.HTTP_404_NOT_FOUND, "status page not found")
 
 
-async def _page(session: AsyncSession, slug: str) -> StatusPage:
+async def find_page(session: AsyncSession, slug: str) -> StatusPage:
     page = (
         await session.scalars(
             select(StatusPage).where(StatusPage.slug == slug, StatusPage.is_enabled)
@@ -62,7 +62,11 @@ def _public_state(
 
 @router.get("/{slug}", response_model_exclude_unset=True)
 async def public_page(slug: str, session: Session) -> PublicPage:
-    page = await _page(session, slug)
+    return await build_public_page(session, await find_page(session, slug))
+
+
+async def build_public_page(session: AsyncSession, page: StatusPage) -> PublicPage:
+    """The page as a visitor sees it; fields the flags don't allow are left unset."""
     rows = (
         await session.execute(
             select(
@@ -135,7 +139,7 @@ async def public_stats(
     range_: RangeQuery = "day",
 ) -> Stats:
     """One item's chart (`item` is the item's `id`), only the fields the page shows."""
-    page = await _page(session, slug)
+    page = await find_page(session, slug)
     if not (page.show_uptime or page.show_response_times):
         raise _not_found()
     check_id = (

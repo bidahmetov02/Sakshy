@@ -1,5 +1,6 @@
-"""Queries shared by several routes: ownership, the maintenance overlay, status tiers,
-chart buckets and pagination cursors. Times come from the database clock."""
+"""Queries shared by several routes and the realtime hub: ownership, the maintenance
+overlay, the check snapshot, status tiers, chart buckets and pagination cursors. Times
+come from the database clock."""
 
 import base64
 import binascii
@@ -16,6 +17,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     ScalarSelect,
+    Select,
     and_,
     exists,
     func,
@@ -25,8 +27,16 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.schemas import Bucket, Stats, Status
-from core.models import Check, CheckGroup, CheckResult, CheckStatsHourly, MaintenanceWindow
+from api.schemas import Bucket, CheckOut, Stats, Status
+from core.models import (
+    Check,
+    CheckGroup,
+    CheckResult,
+    CheckState,
+    CheckStatsHourly,
+    Incident,
+    MaintenanceWindow,
+)
 
 # ---------- Ownership ----------
 
@@ -110,6 +120,62 @@ def in_maintenance() -> Exists:
 def maintenance_since() -> ScalarSelect[datetime]:
     """Start of the earliest active window, or null when not in maintenance."""
     return select(func.min(MaintenanceWindow.starts_at)).where(_active_window()).scalar_subquery()
+
+
+# ---------- Check snapshot ----------
+
+
+def checks_with_state() -> Select[Check, CheckState, list[str], datetime, bool]:
+    """Live checks with their state, as REST and the realtime stream show them. Columns from
+    the outer joins (group emails, open incident start) can be null."""
+    return (
+        select(
+            Check,
+            CheckState,
+            CheckGroup.alert_emails,
+            Incident.started_at,
+            in_maintenance().label("in_maintenance"),
+        )
+        .join(CheckState, CheckState.check_id == Check.id)
+        .outerjoin(CheckGroup, CheckGroup.id == Check.group_id)
+        .outerjoin(Incident, and_(Incident.check_id == Check.id, Incident.ended_at.is_(None)))
+        .where(Check.deleted_at.is_(None))
+    )
+
+
+def check_out(
+    check: Check,
+    state: CheckState,
+    group_emails: list[str] | None,
+    incident_started_at: Any,
+    in_maintenance: bool,
+) -> CheckOut:
+    return CheckOut(
+        id=check.id,
+        name=check.name,
+        url=check.url,
+        interval_s=check.interval_s,
+        timeout_s=float(check.timeout_s),
+        expected_status=check.expected_status,
+        expected_body=check.expected_body,
+        group_id=check.group_id,
+        alert_emails=check.alert_emails,
+        effective_alert_emails=group_emails or check.alert_emails,
+        is_paused=check.is_paused,
+        created_at=check.created_at,
+        updated_at=check.updated_at,
+        state=state.state,
+        state_changed_at=state.state_changed_at,
+        next_run_at=state.next_run_at,
+        last_checked_at=state.last_checked_at,
+        last_ok=state.last_ok,
+        last_status_code=state.last_status_code,
+        last_response_ms=state.last_response_ms,
+        last_error_kind=state.last_error_kind,
+        last_error_message=state.last_error_message,
+        incident_started_at=incident_started_at,
+        in_maintenance=in_maintenance,
+    )
 
 
 # ---------- Status tiers ----------

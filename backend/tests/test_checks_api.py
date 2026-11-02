@@ -307,12 +307,7 @@ async def test_pause_ends_the_incident_without_an_up_email(
     assert incident.end_reason is IncidentEndReason.PAUSED
     assert await rows(engine, Notification) == []
     event = await asyncio.wait_for(listener.get(), timeout=2)
-    assert event == {
-        "check_id": check["id"],
-        "owner_id": await user_id(alice),
-        "state": "pending",
-        "rt_ms": 80,
-    }
+    assert event == {"check_id": check["id"], "owner_id": await user_id(alice)}
 
 
 async def test_pause_and_resume_are_idempotent(

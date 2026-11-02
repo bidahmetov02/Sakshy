@@ -108,25 +108,35 @@ checks are hidden (404).
 start in maintenance, otherwise when the state last changed. `uptime_pct` covers
 the last 30 days. `incidents` are the latest 20 of the listed checks that overlap
 the last 30 days, without their cause. Deleted checks are left out.
-| GET | `/public/{slug}/events` | SSE stream | only events for the page's listed checks, with the same public fields |
+| GET | `/public/{slug}/events` | SSE stream | `ready`, then `page` (the whole page as `GET /public/{slug}` returns it) when one of its listed checks changes; 404 as above. Item and flag edits apply on reconnect; the stream ends once the page is disabled or deleted |
 
 ## Realtime
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/events` | SSE stream of the user's check events |
+| GET | `/events` | SSE stream of the user's checks; ends when the session (JWT) expires |
 
 SSE events:
 ```
-event: check
-data: {"check_id": 17, "state": "down", "last_checked_at": "...", "last_response_ms": null,
-       "incident_started_at": "..."}
+event: ready            # first: (re)fetch the snapshot now, so nothing falls in between
+data: {}
 
-event: incident
-data: {"id": 9, "check_id": 17, "started_at": "...", "ended_at": null}
+event: check            # the check exactly as GET /checks/{id} returns it
+data: {"id": 17, "state": "down", "is_paused": false, "in_maintenance": false, ...}
 
-: ping            # comment line every 15 s, keeps the connection alive
+event: check_removed    # the check was deleted
+data: {"id": 17}
+
+: ping                  # comment line every 15 s, keeps the connection alive
 ```
+
+A check is pushed after anything that changes what REST returns for it: a run, create,
+update, pause, resume, run now, delete, a change to its group or to a maintenance window
+covering it, and a window starting or ending on its own (found within 15 s). Bursts within
+0.5 s are merged into one event per check. There is no separate incident event: `check`
+carries `incident_started_at`, and the client refetches incident lists when it changes.
+Missed events are never replayed: when a stream can't be kept exact it is closed, and the
+client reconnects and refetches on `ready` (see `sequences.md` (c)).
 
 ## Health
 

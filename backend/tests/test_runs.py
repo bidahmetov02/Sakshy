@@ -436,7 +436,7 @@ async def test_completion_notifies_listeners(
     await run(engine, check_id, OK)
 
     event = await asyncio.wait_for(listener.get(), timeout=2)
-    assert event == {"check_id": check_id, "owner_id": alice, "state": "up", "rt_ms": 120}
+    assert event == {"check_id": check_id, "owner_id": alice}
 
 
 async def test_discarded_results_notify_nothing(

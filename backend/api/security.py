@@ -2,6 +2,7 @@
 (`design/sequences.md` (e))."""
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
 
@@ -59,13 +60,19 @@ def create_token(settings: Settings, user_id: int) -> str:
     return jwt.encode(claims, _secret(settings), algorithm=ALGORITHM)  # pyright: ignore[reportUnknownMemberType]
 
 
-def user_id_from_token(settings: Settings, token: str) -> int | None:
-    """The user id, or None if the token is invalid, expired or malformed."""
+@dataclass(frozen=True)
+class TokenClaims:
+    user_id: int
+    expires_at: datetime
+
+
+def claims_from_token(settings: Settings, token: str) -> TokenClaims | None:
+    """The token's user and expiry, or None if it is invalid, expired or malformed."""
     try:
         claims = jwt.decode(  # pyright: ignore[reportUnknownMemberType]
             token, _secret(settings), algorithms=[ALGORITHM], options={"require": ["exp", "sub"]}
         )
-        return int(claims["sub"])
+        return TokenClaims(int(claims["sub"]), datetime.fromtimestamp(claims["exp"], UTC))
     except jwt.InvalidTokenError, ValueError:
         return None
 

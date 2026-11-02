@@ -3,6 +3,8 @@
 Another user's group is a 404. Deleting a group ungroups its checks (the foreign key's
 `SET NULL (group_id)`) and deletes its maintenance windows, so its checks stop being
 silenced: the sweep then queues any suppressed DOWN email to each check's own list.
+Updating or deleting a group notifies open streams of its checks: their effective alert
+list, group or maintenance changes.
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import Session, UserId
 from api.queries import counts_toward_status, tiered_status
 from api.schemas import GroupIn, GroupOut, GroupPatch
+from core.events import notify_checks
 from core.models import Check, CheckGroup, CheckState, MonitorState
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -75,6 +78,15 @@ async def _owned(session: AsyncSession, user_id: int, group_id: int) -> CheckGro
     return group
 
 
+async def _notify_members(session: AsyncSession, user_id: int, group_id: int) -> None:
+    """Delivered on commit: a rolled-back request (404, duplicate name) notifies nobody."""
+    await session.execute(
+        notify_checks(
+            Check.owner_id == user_id, Check.group_id == group_id, Check.deleted_at.is_(None)
+        )
+    )
+
+
 @router.get("")
 async def list_groups(user_id: UserId, session: Session) -> list[GroupOut]:
     stmt = _with_status(user_id).order_by(CheckGroup.name, CheckGroup.id)
@@ -106,14 +118,17 @@ async def update_group(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(group, field, value)
     try:
-        await session.commit()
+        await session.flush()
     except IntegrityError:
         raise _duplicate() from None
+    await _notify_members(session, user_id, group_id)
+    await session.commit()
     return await _get(session, user_id, group_id)
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(group_id: int, user_id: UserId, session: Session) -> None:
+    await _notify_members(session, user_id, group_id)  # before the delete ungroups them
     deleted = (
         await session.execute(
             delete(CheckGroup)

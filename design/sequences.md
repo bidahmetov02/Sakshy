@@ -38,7 +38,7 @@ sequenceDiagram
             T->>DB: INSERT notifications (outbox)
         end
         T->>DB: UPDATE check_state (state, last_*, next_run_at, clear lease)
-        T->>DB: SELECT pg_notify('check_events', ...)
+        T->>DB: SELECT pg_notify('check_events', {check_id, owner_id})
         T->>DB: COMMIT
         DB-->>API: notification delivered, only because it committed
     end
@@ -116,36 +116,51 @@ sequenceDiagram
     participant B as Browser (React)
     participant N as nginx
     participant API as API: SSE handler
-    participant L as API: listener task
+    participant H as API: realtime hub
     participant DB as PostgreSQL
     participant W as Worker
 
-    L->>DB: on API startup: LISTEN check_events (dedicated connection)
+    H->>DB: on API startup: LISTEN check_events (dedicated connection)
+    B->>N: GET /api/events (EventSource, same cookie)
+    N->>API: proxy, buffering off
+    API->>H: authenticate, register a stream for user_id
+    API-->>B: 200 text/event-stream (stays open), event ready
     B->>N: GET /api/checks (cookie)
     N->>API: proxy
     API-->>B: snapshot: every check with its current state
-    B->>N: GET /api/events (EventSource, same cookie)
-    N->>API: proxy, buffering off
-    API->>API: authenticate, register a queue for user_id
-    API-->>B: 200 text/event-stream (stays open)
-    W->>DB: COMMIT including pg_notify with check_id, owner_id, state, rt_ms
-    DB-->>L: notification
-    L->>API: put event into queues of user owner_id and public pages listing check_id
-    API-->>B: event check, data with the JSON payload
-    B->>B: patch TanStack Query cache, UI re-renders
+    W->>DB: COMMIT including pg_notify with check_id, owner_id
+    DB-->>H: notification
+    H->>H: mark check dirty if a stream of owner_id or a page listing it is open
+    loop every 0.5 s, if anything is dirty
+        H->>DB: reload dirty checks (the REST query), rebuild dirty public pages
+        H-->>B: event check (or check_removed), data the check as REST returns it
+    end
+    B->>B: replace the check in the TanStack Query cache, UI re-renders
     loop every 15 s
         API-->>B: comment ping, keeps proxies from closing an idle stream
+        H->>DB: windows that started or ended since the last look → mark their checks dirty
     end
-    Note over B,API: Connection drops → EventSource reconnects automatically → browser refetches the snapshot. Missed events are never replayed, the snapshot covers them.
+    Note over B,API: Connection drops → EventSource reconnects → ready → browser refetches the snapshot. Missed events are never replayed, the snapshot covers them.
 ```
 
 **Notes:**
-- The payload carries `owner_id`, so the listener can route events without a
-  database query.
-- A public page's stream is filtered by the set of `check_id`s that page lists,
-  loaded when the stream connects. Changes to the page config apply on reconnect.
-- "How long has it been down" is computed in the browser from the incident's
-  `started_at`. The server doesn't tick it.
+- **A notification only names a check.** The hub reloads it with the same query as
+  REST, so a run, pause, delete, group change or maintenance change all look the same,
+  and the stream can't drift from REST. The payload carries `owner_id`, so the hub
+  queries only for checks someone is watching.
+- **The snapshot is fetched after `ready`,** once the stream is registered, so no change
+  falls between the two.
+- **A stream that can't be kept exact is closed, never patched:** a client whose queue
+  overflows, a failed reload, a lost LISTEN connection (all streams close once it is back),
+  an expired session, a disabled or deleted public page. The client reconnects and
+  refetches.
+- **Public pages:** a stream follows the checks its page listed when it connected and
+  receives the whole rebuilt page, with the same public fields. Edits to the page's items
+  and flags apply on reconnect.
+- **Window edges:** a window starting or ending is a time event with no write, so the hub
+  looks for them every 15 s. Window and group edits notify their checks directly.
+- "How long has it been down" is computed in the browser from the check's
+  `incident_started_at`. The server doesn't tick it.
 
 ---
 

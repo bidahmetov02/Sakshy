@@ -3,7 +3,18 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from api.routes import auth, checks, groups, health, incidents, maintenance, public, status_pages
+from api.realtime import Hub
+from api.routes import (
+    auth,
+    checks,
+    events,
+    groups,
+    health,
+    incidents,
+    maintenance,
+    public,
+    status_pages,
+)
 from api.security import check_secret
 from core.db import create_engine
 from core.log import configure_logging
@@ -18,7 +29,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         configure_logging(settings.log_level)
         app.state.engine = create_engine(str(settings.database_url))
+        app.state.hub = Hub(app.state.engine)
+        await app.state.hub.start()
         yield
+        await app.state.hub.stop()
         await app.state.engine.dispose()
 
     app = FastAPI(
@@ -30,7 +44,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     api = APIRouter(prefix="/api")
-    for module in (auth, checks, groups, maintenance, incidents, status_pages, public, health):
+    modules = (auth, checks, groups, maintenance, incidents, status_pages, public, events, health)
+    for module in modules:
         api.include_router(module.router)
     app.include_router(api)
     return app

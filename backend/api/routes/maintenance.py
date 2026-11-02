@@ -4,7 +4,9 @@ emails only; when it ends with the site still down, the sweep queues the DOWN em
 Times are checked against the database clock, and a time in the past means "now": a
 `starts_at` on create or before the window starts, an `ends_at` while it is active (ending
 it early). So a browser whose clock runs a little behind still gets what it asked for.
-Another user's window, or one on a deleted check, is a 404.
+Another user's window, or one on a deleted check, is a 404. Every change notifies open
+streams of the checks the window covers; the realtime hub catches windows starting and
+ending on their own.
 """
 
 from typing import Annotated
@@ -16,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import Session, UserId
 from api.queries import db_now, field_error, hold_check, hold_group
 from api.schemas import MaintenanceIn, MaintenanceOut, MaintenancePatch, WindowStatus
+from core.events import notify_checks
 from core.models import Check, MaintenanceWindow
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -71,6 +74,18 @@ async def _lock(session: AsyncSession, user_id: int, window_id: int) -> Maintena
     return window
 
 
+async def _notify_covered(session: AsyncSession, window: MaintenanceWindow) -> None:
+    """The window's check, or its group's live checks."""
+    target = (
+        Check.id == window.check_id
+        if window.check_id is not None
+        else Check.group_id == window.group_id
+    )
+    await session.execute(
+        notify_checks(target, Check.owner_id == window.owner_id, Check.deleted_at.is_(None))
+    )
+
+
 @router.get("")
 async def list_windows(
     user_id: UserId,
@@ -95,6 +110,8 @@ async def create_window(body: MaintenanceIn, user_id: UserId, session: Session) 
         raise field_error("ends_at", "must be in the future and after starts_at", body.ends_at)
     window = MaintenanceWindow(owner_id=user_id, **body.model_dump() | {"starts_at": starts_at})
     session.add(window)
+    await session.flush()
+    await _notify_covered(session, window)
     await session.commit()
     return await _get(session, user_id, window.id)
 
@@ -123,6 +140,7 @@ async def update_window(
     window.starts_at, window.ends_at = starts_at, ends_at
     if "reason" in changes:
         window.reason = changes["reason"]
+    await _notify_covered(session, window)
     await session.commit()
     return await _get(session, user_id, window_id)
 
@@ -131,4 +149,5 @@ async def update_window(
 async def delete_window(window_id: int, user_id: UserId, session: Session) -> None:
     window = await _lock(session, user_id, window_id)
     await session.execute(delete(w).where(w.id == window.id))
+    await _notify_covered(session, window)
     await session.commit()

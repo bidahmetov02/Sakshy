@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.security import COOKIE, user_id_from_token
+from api.security import COOKIE, TokenClaims, claims_from_token
 from core.settings import Settings
 
 
@@ -29,11 +29,18 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 _cookie = APIKeyCookie(name=COOKIE, auto_error=False)
 
 
-def current_user_id(settings: AppSettings, token: Annotated[str | None, Depends(_cookie)]) -> int:
-    user_id = None if token is None else user_id_from_token(settings, token)
-    if user_id is None:
+def current_claims(
+    settings: AppSettings, token: Annotated[str | None, Depends(_cookie)]
+) -> TokenClaims:
+    claims = None if token is None else claims_from_token(settings, token)
+    if claims is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated")
-    return user_id
+    return claims
 
 
+def current_user_id(claims: Annotated[TokenClaims, Depends(current_claims)]) -> int:
+    return claims.user_id
+
+
+Claims = Annotated[TokenClaims, Depends(current_claims)]
 UserId = Annotated[int, Depends(current_user_id)]

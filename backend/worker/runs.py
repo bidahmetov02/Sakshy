@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlalchemy.orm import aliased
 
-from core.events import notify_check
+from core.events import notify_checks
 from core.models import (
     AlertKind,
     Check,
@@ -159,10 +159,9 @@ async def complete(
         # Read the config in a separate statement, after taking the lock. In a join, a
         # statement that waited for the lock re-checks only the locked row and would still
         # see the config from before a pause or delete committed by whoever held it.
-        owner_id, group_id, interval_s, is_paused, deleted_at, recipients, now = (
+        group_id, interval_s, is_paused, deleted_at, recipients, now = (
             await conn.execute(
                 select(
-                    Check.owner_id,
                     Check.group_id,
                     Check.interval_s,
                     Check.is_paused,
@@ -241,7 +240,7 @@ async def complete(
             )
         )
         # Delivered to listeners only if this transaction commits.
-        await conn.execute(notify_check(claim.check_id, owner_id, new.state, result.response_ms))
+        await conn.execute(notify_checks(Check.id == claim.check_id))
     return Completion.RECORDED
 
 

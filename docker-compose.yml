@@ -45,7 +45,9 @@ services:
     environment:
       <<: *backend-env
       JWT_SECRET: dev-only-jwt-secret-not-for-production-0123456789
-    command: ["uvicorn", "api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    # Open SSE streams never finish on their own: on shutdown, cut them after 3 s.
+    command: ["uvicorn", "api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000",
+              "--timeout-graceful-shutdown", "3"]
     ports:
       - "127.0.0.1:8000:8000" # dev: /api/docs
     healthcheck:
