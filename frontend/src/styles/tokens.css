@@ -1,0 +1,66 @@
+/*
+ * Sakshy tokens. Quiet paper and ink; colour is reserved for state, and only
+ * appears where something needs attention. State colours were validated for
+ * colour-vision deficiency on each mode's paper, and always ship with a glyph
+ * and a word, never colour alone.
+ */
+:root {
+  color-scheme: light;
+
+  --paper: #f5f6f2;
+  --raised: #fbfbf9;
+  --ink: #1b2320;
+  --ink-2: #47524d;
+  --muted: #5f6964;
+  --rule: #dde1da;
+  --rule-strong: #c5cbc3;
+  --hover: #ebede7;
+
+  --up: #1f8a5b;
+  --failing: #b8820f;
+  --down: #c4362c;
+  --maint: #4a63c9;
+  --none: #dde1da;
+
+  --font: 'Schibsted Grotesk Variable', 'Schibsted Grotesk', system-ui, sans-serif;
+
+  /* Type scale: 13 / 14 / 16 / 20 / 28 / hero */
+  --t-xs: 0.8125rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.25rem;
+  --t-xl: 1.75rem;
+  --t-hero: clamp(2rem, 1.2rem + 3.6vw, 3.25rem);
+
+  --gutter: 16px;
+  --page: 1080px;
+  --radius: 6px;
+  --radius-lg: 10px;
+}
+
+@media (min-width: 720px) {
+  :root {
+    --gutter: 32px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --paper: #141a18;
+    --raised: #1b2220;
+    --ink: #e4e9e5;
+    --ink-2: #b4bdb8;
+    --muted: #8d9792;
+    --rule: #29322e;
+    --rule-strong: #3a4540;
+    --hover: #1f2724;
+
+    --up: #34a874;
+    --failing: #ba8b1c;
+    --down: #d23f3a;
+    --maint: #6e84e6;
+    --none: #2c3531;
+  }
+}

@@ -1,32 +1,13 @@
-# React + TypeScript + Vite
+# Sakshy frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + TypeScript SPA, served by nginx in compose (`http://localhost:8080`), which also proxies `/api`.
 
-Currently, two official plugins are available:
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server; proxies `/api` to `localhost:8000` (the compose api) |
+| `npm test` | Vitest unit tests (run in UTC) |
+| `npm run lint` / `npm run typecheck` | oxlint / `tsc -b` |
+| `npm run gen:api` | Regenerates `src/api/schema.d.ts` from the running API's OpenAPI spec. Runs openapi-typescript with its own TypeScript 5 via `npx`, since the project uses TypeScript 7 |
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Layout: `src/api` (typed client and TanStack Query hooks), `src/lib` (pure logic, unit-tested),
+`src/components`, `src/pages`, `src/styles` (`tokens.css` holds the light and dark palettes).
