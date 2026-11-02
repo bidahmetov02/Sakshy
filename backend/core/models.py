@@ -50,6 +50,7 @@ class ErrorKind(enum.StrEnum):
     BODY_MISMATCH = "body_mismatch"
     TOO_LARGE = "too_large"
     OTHER = "other"
+    BLOCKED = "blocked"  # the target resolves to a private or loopback address
 
 
 class AlertKind(enum.StrEnum):
@@ -209,6 +210,7 @@ class CheckResult(Base):
     error_kind: Mapped[ErrorKind | None]
     error_message: Mapped[str | None]
     is_retry: Mapped[bool] = mapped_column(server_default=false())
+    in_maintenance: Mapped[bool] = mapped_column(server_default=false())
 
 
 class CheckStatsHourly(Base):

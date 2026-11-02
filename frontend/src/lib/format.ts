@@ -53,10 +53,16 @@ function sameDay(a: Date, b: Date): boolean {
   )
 }
 
-/** "Today 14:05", "Yesterday 09:12", "Nov 1, 14:05", "Dec 30, 2025, 14:05". */
-export function formatWhen(iso: string, now: Date = new Date(), locale?: string): string {
+/** "Today 14:05", "Yesterday 09:12", "Nov 1, 14:05", "Dec 30, 2025, 14:05".
+ * With `timeStyle: 'medium'`, times show seconds: "Today 14:05:41". */
+export function formatWhen(
+  iso: string,
+  now: Date = new Date(),
+  locale?: string,
+  timeStyle: 'short' | 'medium' = 'short',
+): string {
   const date = new Date(iso)
-  const time = date.toLocaleTimeString(locale, { timeStyle: 'short' })
+  const time = date.toLocaleTimeString(locale, { timeStyle })
   if (sameDay(date, now)) return `Today ${time}`
   const yesterday = new Date(now)
   yesterday.setDate(now.getDate() - 1)

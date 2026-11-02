@@ -71,8 +71,10 @@ in-flight HTTP     = runs/s × response time      (Little's law)
 - Week and month charts: O(buckets) from rollups: 168 or 720 rows per check.
 - Uptime %: a sum over rollups.
 
-## How to verify (later)
+## Measured
 
-A load test using the emulator: seed N checks pointing at `/ok`, `/slow` and
-`/hang` in fixed ratios, then measure check-run lag (`now() - next_run_at` at
-claim time), commits/s, and API p95 latency while it runs.
+`backend/tools/loadtest.py` (results in the README, section "Load test"). The
+first limit was not the database but the worker's in-flight slots: one worker
+(`WORKER_CONCURRENCY=100`, about 0.5 s average run) does about 180–200 runs/s,
+about 5k checks. Two workers ran 9k checks (300 runs/s) on time with Postgres
+at about 1.6 cores and 2.4 commits per run, so item 1 above (commits) comes next.

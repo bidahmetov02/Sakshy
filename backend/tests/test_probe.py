@@ -1,18 +1,29 @@
 """Probe + evaluate against the compose emulator, and error classification."""
 
+import ipaddress
 import socket
 import ssl
 from collections.abc import AsyncGenerator
+from urllib.parse import urlsplit
 
 import httpx2
 import pytest
 
 from core.models import ErrorKind
+from core.targets import is_public, private_url_host
+from tests.conftest import EMULATOR_HOST
 from worker.probe import MAX_BODY_BYTES, ProbeResult, classify, create_client, probe
 
 
 @pytest.fixture
 async def client() -> AsyncGenerator[httpx2.AsyncClient]:
+    async with create_client(frozenset({EMULATOR_HOST})) as client:
+        yield client
+
+
+@pytest.fixture
+async def guarded() -> AsyncGenerator[httpx2.AsyncClient]:
+    """No allowlist: what the worker does for every host but the emulator."""
     async with create_client() as client:
         yield client
 
@@ -172,3 +183,68 @@ def test_connect_errors_are_classified_by_cause(cause: BaseException, kind: Erro
 
 def test_other_transport_errors_are_other() -> None:
     assert classify(httpx2.RemoteProtocolError("server hung up")) is ErrorKind.OTHER
+
+
+# ---------- Private addresses (SSRF) ----------
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]", "0.0.0.0"])
+async def test_private_targets_are_blocked(
+    guarded: httpx2.AsyncClient, emulator: str, host: str
+) -> None:
+    port = urlsplit(emulator).port
+    result = await get(guarded, f"http://{host}:{port}/ok")
+    assert not result.ok
+    assert result.error_kind is ErrorKind.BLOCKED
+    assert result.error_message is not None
+    assert result.error_message.endswith("resolves to a private or reserved address")
+
+
+async def test_a_redirect_to_a_private_address_is_blocked(emulator: str) -> None:
+    """The first hop is allowed; the redirect target is checked again when connecting."""
+    private = f"http://127.0.0.1:{urlsplit(emulator).port}/ok"
+    async with create_client(frozenset({"localhost"})) as client:
+        port = urlsplit(emulator).port
+        result = await get(client, f"http://localhost:{port}/redirect-to?url={private}")
+    assert result.error_kind is ErrorKind.BLOCKED
+
+
+@pytest.mark.parametrize(
+    ("address", "public"),
+    [
+        ("8.8.8.8", True),
+        ("2606:4700:4700::1111", True),
+        ("127.0.0.1", False),
+        ("10.1.2.3", False),
+        ("172.18.0.2", False),  # docker networks
+        ("192.168.1.1", False),
+        ("169.254.169.254", False),  # cloud metadata
+        ("100.64.0.1", False),  # carrier-grade NAT
+        ("0.0.0.0", False),
+        ("224.0.0.1", False),
+        ("::1", False),
+        ("fd00::1", False),
+        ("fe80::1", False),
+        ("::ffff:127.0.0.1", False),  # IPv4-mapped
+    ],
+)
+def test_is_public(address: str, public: bool) -> None:
+    assert is_public(ipaddress.ip_address(address)) is public
+
+
+@pytest.mark.parametrize(
+    ("url", "host"),
+    [
+        ("http://localhost:8000/", "localhost"),
+        ("http://api.localhost/", "api.localhost"),
+        ("http://10.0.0.5/", "10.0.0.5"),
+        ("http://[::1]:8080/", "::1"),
+        ("http://169.254.169.254/latest/meta-data/", "169.254.169.254"),
+        ("https://example.com/", None),
+        ("http://8.8.8.8/", None),
+        ("http://emulator:9000/ok", None),  # names are checked by the worker, at connect time
+        ("http://Allowed.local/", None),
+    ],
+)
+def test_private_url_host(url: str, host: str | None) -> None:
+    assert private_url_host(url, frozenset({"allowed.local"})) == host

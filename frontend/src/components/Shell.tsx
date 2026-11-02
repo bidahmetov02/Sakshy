@@ -6,6 +6,7 @@ import { useLiveUpdates } from '../api/live'
 import { useHealth, useMe } from '../api/queries'
 import { formatDuration } from '../lib/format'
 import { Footer } from './Footer'
+import { LogoMark } from './Logo'
 
 /** A worker heartbeat older than this means checks aren't running. */
 const STALE_WORKER_S = 60
@@ -62,7 +63,8 @@ export function Shell() {
       <header className="topbar">
         <div className="topbar-inner">
           <Link to="/" className="wordmark">
-            Sakshy
+            <LogoMark className="wordmark-mark" />
+            sakshy
           </Link>
           <Nav />
           <LiveIndicator />

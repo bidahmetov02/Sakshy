@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router'
 import { ApiError, api, unwrap } from '../api/client'
 import { keys, useMe } from '../api/queries'
+import { LogoMark } from '../components/Logo'
 import { errorMessage, formErrors } from '../lib/errors'
 
 type Mode = 'login' | 'signup'
@@ -56,7 +57,10 @@ export function AuthPage({ mode }: { mode: Mode }) {
 
   return (
     <main className="auth">
-      <p className="wordmark">Sakshy</p>
+      <p className="wordmark">
+        <LogoMark className="wordmark-mark" />
+        sakshy
+      </p>
       <h1 className="auth-title">{copy.title}</h1>
       <form className="stack" onSubmit={(e) => void submit(e)}>
         <div className="field">

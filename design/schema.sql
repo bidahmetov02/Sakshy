@@ -19,7 +19,8 @@ CREATE TYPE monitor_state AS ENUM ('pending', 'up', 'failing', 'down');
 
 CREATE TYPE error_kind AS ENUM (
     'timeout', 'dns', 'connect', 'tls',
-    'status_mismatch', 'body_mismatch', 'too_large', 'other'
+    'status_mismatch', 'body_mismatch', 'too_large', 'other',
+    'blocked'                                     -- target resolves to a private address
 );
 
 CREATE TYPE alert_kind    AS ENUM ('down', 'up');
@@ -124,6 +125,7 @@ CREATE TABLE check_results (
     error_kind    error_kind,
     error_message text,                           -- truncated by the app
     is_retry      boolean     NOT NULL DEFAULT false,
+    in_maintenance boolean    NOT NULL DEFAULT false,  -- a window applied at completion
     PRIMARY KEY (check_id, checked_at) INCLUDE (ok, response_ms)
 ) PARTITION BY RANGE (checked_at);
 

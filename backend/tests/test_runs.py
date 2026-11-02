@@ -162,6 +162,7 @@ async def test_success_records_result_rollup_and_state(engine: AsyncEngine, alic
         120,
     )
     assert not result.is_retry
+    assert not result.in_maintenance
 
     [rollup] = await rows(engine, CheckStatsHourly)
     assert rollup.bucket == c.claimed_at.replace(minute=0, second=0, microsecond=0)
@@ -307,6 +308,7 @@ async def test_maintenance_on_the_check_suppresses_the_down_email(
     assert incident.began_in_maintenance
     assert not incident.down_alert_queued
     assert await rows(engine, Notification) == []
+    assert all(r.in_maintenance for r in await rows(engine, CheckResult))
 
 
 async def test_maintenance_on_the_group_suppresses_the_down_email(
@@ -318,6 +320,16 @@ async def test_maintenance_on_the_group_suppresses_the_down_email(
     await go_down(engine, check_id)
 
     assert await rows(engine, Notification) == []
+    assert all(r.in_maintenance for r in await rows(engine, CheckResult))
+
+
+async def test_a_passing_run_during_maintenance_is_marked(engine: AsyncEngine, alice: int) -> None:
+    check_id = await add_check(engine, alice)
+    await add_window(engine, alice, check_id=check_id)
+    await run(engine, check_id, OK)
+
+    [result] = await rows(engine, CheckResult)
+    assert result.ok and result.in_maintenance
 
 
 async def test_maintenance_on_another_check_does_not_apply(engine: AsyncEngine, alice: int) -> None:
@@ -328,6 +340,7 @@ async def test_maintenance_on_another_check_does_not_apply(engine: AsyncEngine, 
     await go_down(engine, check_id)
 
     assert len(await rows(engine, Notification)) == 1
+    assert not any(r.in_maintenance for r in await rows(engine, CheckResult))
 
 
 async def test_past_and_future_windows_do_not_apply(engine: AsyncEngine, alice: int) -> None:

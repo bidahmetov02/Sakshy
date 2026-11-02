@@ -14,6 +14,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import asyncpg  # pyright: ignore[reportMissingTypeStubs]
 import httpx2
@@ -56,6 +57,7 @@ def settings() -> Settings:
         smtp_host=SMTP_HOST,
         smtp_port=SMTP_PORT,
         jwt_secret=SecretStr("test-only-secret-" + "x" * 32),
+        probe_allowed_hosts=frozenset({EMULATOR_HOST}),
     )
 
 
@@ -92,6 +94,7 @@ async def engine(migrated_engine: AsyncEngine) -> AsyncGenerator[AsyncEngine]:
 
 
 EMULATOR_URL = os.environ.get("EMULATOR_URL", "http://127.0.0.1:9000")
+EMULATOR_HOST = urlsplit(EMULATOR_URL).hostname or ""
 
 
 @pytest.fixture(scope="session")

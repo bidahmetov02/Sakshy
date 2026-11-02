@@ -631,7 +631,7 @@ export interface components {
          * ErrorKind
          * @enum {string}
          */
-        ErrorKind: "timeout" | "dns" | "connect" | "tls" | "status_mismatch" | "body_mismatch" | "too_large" | "other";
+        ErrorKind: "timeout" | "dns" | "connect" | "tls" | "status_mismatch" | "body_mismatch" | "too_large" | "other" | "blocked";
         /** GroupIn */
         GroupIn: {
             /** Name */
@@ -893,6 +893,8 @@ export interface components {
             error_message: string | null;
             /** Is Retry */
             is_retry: boolean;
+            /** In Maintenance */
+            in_maintenance: boolean;
         };
         /** Stats */
         Stats: {

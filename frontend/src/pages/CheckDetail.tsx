@@ -291,13 +291,18 @@ function Results({ checkId }: { checkId: number }) {
             <tbody>
               {items.map((r) => (
                 <tr key={`${r.checked_at}-${r.is_retry}`} className={r.ok ? undefined : 'is-failed'}>
-                  <td className="nowrap">{formatWhen(r.checked_at)}</td>
+                  <td className="nowrap">{formatWhen(r.checked_at, undefined, undefined, 'medium')}</td>
                   <td>
                     <span className="result">
                       <StateGlyph state={r.ok ? 'up' : 'down'} />
                       <span>
                         {r.ok ? `Passed, status ${r.status_code}` : describeError(r.error_kind, null, r.status_code)}
-                        {r.is_retry && <span className="muted"> (retry)</span>}
+                        {(r.is_retry || r.in_maintenance) && (
+                          <span className="muted">
+                            {' '}
+                            ({[r.is_retry && 'retry', r.in_maintenance && 'maintenance'].filter(Boolean).join(', ')})
+                          </span>
+                        )}
                         {!r.ok && r.error_message && r.error_kind !== 'status_mismatch' && (
                           <span className="result-msg">{r.error_message}</span>
                         )}

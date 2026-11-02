@@ -104,10 +104,19 @@ textarea {
 }
 
 .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
   font-size: var(--t-lg);
   font-weight: 700;
   letter-spacing: -0.02em;
   text-decoration: none;
+}
+
+.wordmark-mark {
+  height: 1.35em;
+  width: auto;
+  flex: none;
 }
 
 .nav {

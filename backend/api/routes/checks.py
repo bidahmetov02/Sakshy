@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import Session, UserId
+from api.deps import AppSettings, Session, UserId
 from api.queries import (
     Limit,
     RangeQuery,
@@ -38,6 +38,7 @@ from core.models import (
     IncidentEndReason,
     MonitorState,
 )
+from core.targets import private_url_host
 
 router = APIRouter(prefix="/checks", tags=["checks"])
 
@@ -122,8 +123,23 @@ async def list_checks(
     return [check_out(*row) for row in await session.execute(stmt)]
 
 
+def _require_public_url(url: str, settings: AppSettings) -> None:
+    """Reject obviously private targets early; the worker refuses the rest at connect time."""
+    if (host := private_url_host(url, settings.probe_allowed_hosts)) is not None:
+        error = {
+            "type": "value_error",
+            "loc": ("body", "url"),
+            "msg": f"{host} is a private address: checks can only monitor public sites",
+            "input": url,
+        }
+        raise RequestValidationError([error])
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
-async def create_check(body: CheckIn, user_id: UserId, session: Session) -> CheckOut:
+async def create_check(
+    body: CheckIn, user_id: UserId, session: Session, settings: AppSettings
+) -> CheckOut:
+    _require_public_url(body.url, settings)
     if body.group_id is not None:
         await hold_group(session, user_id, body.group_id)
     check = Check(owner_id=user_id, **_config(body))
@@ -142,7 +158,7 @@ async def get_check(check_id: int, user_id: UserId, session: Session) -> CheckOu
 
 @router.patch("/{check_id}")
 async def update_check(
-    check_id: int, body: CheckPatch, user_id: UserId, session: Session
+    check_id: int, body: CheckPatch, user_id: UserId, session: Session, settings: AppSettings
 ) -> CheckOut:
     """State is kept: the next run uses the new config and decides."""
     check, _ = await _lock(session, user_id, check_id)
@@ -162,6 +178,8 @@ async def update_check(
     except ValidationError as exc:
         errors = exc.errors(include_url=False, include_context=False)
         raise RequestValidationError([e | {"loc": ("body", *e["loc"])} for e in errors]) from None
+    if merged.url != check.url:
+        _require_public_url(merged.url, settings)
     if merged.group_id is not None and merged.group_id != check.group_id:
         await hold_group(session, user_id, merged.group_id)
 

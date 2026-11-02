@@ -143,6 +143,7 @@ async def test_results_newest_first_in_pages(
         "error_kind",
         "error_message",
         "is_retry",
+        "in_maintenance",
     }
 
 

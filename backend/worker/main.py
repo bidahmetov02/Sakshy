@@ -29,6 +29,9 @@ from worker.probe import create_client, probe
 log = logging.getLogger("worker")
 
 
+CLAIM_BATCH_DELAY_S = 0.05  # after a slot frees up, let a few more free before claiming
+
+
 async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(stop.wait(), seconds)
@@ -62,11 +65,13 @@ class Worker:
         self.send = send
         self.id = f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(2)}"
         self.in_flight: set[asyncio.Task[None]] = set()
+        self.slot_freed = asyncio.Event()
 
     async def claim_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             # Claim no more than there are free slots, so a claimed check starts at once.
             free = self.settings.worker_concurrency - len(self.in_flight)
+            claimed = 0
             if free > 0:
                 claimed_mono = time.monotonic()
                 try:
@@ -77,8 +82,30 @@ class Worker:
                 for claim in claims:
                     task = asyncio.create_task(self.run_check(claim, claimed_mono))
                     self.in_flight.add(task)
-                    task.add_done_callback(self.in_flight.discard)
-            await _sleep_or_stop(stop, self.settings.worker_claim_interval_s)
+                    task.add_done_callback(self._finished)
+                claimed = len(claims)
+            if free == 0 or claimed == free:
+                # Saturated, or more may be due: claim again as soon as slots free up.
+                await self._wait_for_slot(stop)
+                await _sleep_or_stop(stop, CLAIM_BATCH_DELAY_S)
+            else:
+                await _sleep_or_stop(stop, self.settings.worker_claim_interval_s)
+
+    def _finished(self, task: asyncio.Task[None]) -> None:
+        self.in_flight.discard(task)
+        self.slot_freed.set()
+
+    async def _wait_for_slot(self, stop: asyncio.Event) -> None:
+        """Until a run finishes (or the worker stops), if every slot is busy."""
+        self.slot_freed.clear()
+        if len(self.in_flight) < self.settings.worker_concurrency:
+            return
+        waits = [asyncio.create_task(self.slot_freed.wait()), asyncio.create_task(stop.wait())]
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for wait in waits:
+                wait.cancel()
 
     async def run_check(self, claim: runs.Claim, claimed_mono: float) -> None:
         try:
@@ -133,7 +160,7 @@ class Worker:
 async def run(settings: Settings, stop: asyncio.Event, send: outbox.Send | None = None) -> None:
     engine = create_engine(str(settings.database_url))
     try:
-        async with create_client() as client:
+        async with create_client(settings.probe_allowed_hosts) as client:
             worker = Worker(settings, engine, client, send or outbox.smtp_sender(settings))
             await heartbeat.mark_alive(engine, worker.id)
             # Before claiming, so today's results partition exists.

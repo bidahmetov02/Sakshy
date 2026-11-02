@@ -127,6 +127,7 @@ export const ERROR_LABEL: Record<NonNullable<Check['last_error_kind']>, string> 
   body_mismatch: 'Expected text not found',
   too_large: 'Response too large',
   other: 'Request failed',
+  blocked: 'Blocked',
 }
 
 export const END_REASON_LABEL: Record<'recovered' | 'paused' | 'check_deleted', string> = {

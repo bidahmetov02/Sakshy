@@ -106,6 +106,26 @@ async def test_create_validates_config(
     assert response.status_code == 422, overrides
 
 
+@pytest.mark.parametrize(
+    "url", ["http://localhost/", "http://10.0.0.5/", "http://[::1]/", "http://169.254.169.254/"]
+)
+async def test_private_urls_are_rejected(alice: httpx2.AsyncClient, url: str) -> None:
+    response = await alice.post("/api/checks", json=CHECK | {"url": url})
+    assert response.status_code == 422
+    [error] = response.json()["detail"]
+    assert error["loc"] == ["body", "url"]
+    assert "private address" in error["msg"]
+
+    check = await create_check(alice)
+    response = await alice.patch(f"/api/checks/{check['id']}", json={"url": url})
+    assert response.status_code == 422
+
+
+async def test_allowed_hosts_may_be_private(alice: httpx2.AsyncClient, emulator: str) -> None:
+    response = await alice.post("/api/checks", json=CHECK | {"url": f"{emulator}/ok"})
+    assert response.status_code == 201
+
+
 async def test_cannot_use_another_users_group(
     engine: AsyncEngine, alice: httpx2.AsyncClient, bob: httpx2.AsyncClient
 ) -> None:

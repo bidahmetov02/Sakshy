@@ -3,6 +3,8 @@ name: sakshy
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://sakshy:sakshy@db:5432/sakshy
   LOG_LEVEL: INFO
+  # Probes refuse private addresses (SSRF), except on these hosts.
+  PROBE_ALLOWED_HOSTS: emulator
 
 x-backend: &backend
   build: ./backend
@@ -68,6 +70,16 @@ services:
     # Graceful shutdown waits ~10 s for in-flight checks; give it headroom.
     stop_grace_period: 15s
 
+  # Demo data, on demand only: docker compose run --rm seed
+  seed:
+    <<: *backend
+    command: ["python", "-m", "tools.seed"]
+    environment:
+      <<: *backend-env
+      APP_BASE_URL: http://localhost:8080
+    profiles: ["seed"]
+    restart: "no"
+
   emulator:
     build: ./backend
     command: ["uvicorn", "emulator.main:app", "--host", "0.0.0.0", "--port", "9000"]
@@ -76,7 +88,7 @@ services:
     restart: unless-stopped
 
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.32.0
     ports:
       - "127.0.0.1:8025:8025" # web UI and API (tests read delivered emails here)
       - "127.0.0.1:1025:1025" # dev: SMTP for host-run tests

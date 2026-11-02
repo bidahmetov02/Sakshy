@@ -113,6 +113,14 @@ flowchart TB
 engine (asyncpg driver), the semaphore, and the enlarged default thread pool
 used for DNS lookups.
 
+**Private addresses (SSRF):** probes run inside our network, so the client's
+network backend resolves each connection's host itself, refuses it (error kind
+`blocked`) if any address is private, loopback, link-local or reserved, then
+connects to the IP it checked. That covers every redirect hop and DNS
+rebinding. `PROBE_ALLOWED_HOSTS` exempts named hosts (compose: `emulator`). The
+API also rejects localhost and private IP literals when a check is saved, for
+quick feedback.
+
 **Database access:** the API uses the SQLAlchemy ORM for CRUD. The worker's hot
 paths (claim, completion transaction, sweep) use SQLAlchemy Core with explicit
 SQL. The API's LISTEN connection is a raw asyncpg connection.

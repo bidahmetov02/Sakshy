@@ -1,7 +1,8 @@
 from functools import lru_cache
+from typing import Annotated, Any
 
-from pydantic import PostgresDsn, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import PostgresDsn, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -32,6 +33,9 @@ class Settings(BaseSettings):
     worker_sweep_interval_s: float = 15.0
     worker_housekeeping_interval_s: float = 3600.0
     rollup_retention_days: int = 90  # hourly rollups; raw results are kept 7 days
+    # Hosts probes may reach even at private addresses, comma-separated (dev: "emulator").
+    # The API reads it too, to accept such URLs when a check is saved.
+    probe_allowed_hosts: Annotated[frozenset[str], NoDecode] = frozenset()
 
     # Alert emails
     smtp_host: str = "localhost"
@@ -39,6 +43,13 @@ class Settings(BaseSettings):
     smtp_timeout_s: float = 10.0
     mail_from: str = "Sakshy <alerts@sakshy.local>"
     app_base_url: str = "http://localhost:8080"  # for links in emails
+
+    @field_validator("probe_allowed_hosts", mode="before")
+    @classmethod
+    def _split_hosts(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.split(",")
+        return frozenset(h.strip().lower() for h in value if h.strip())
 
 
 @lru_cache

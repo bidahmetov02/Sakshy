@@ -262,6 +262,7 @@ class ResultOut(BaseModel):
     error_kind: ErrorKind | None
     error_message: str | None
     is_retry: bool  # a confirmation retry after a failure: not counted in stats
+    in_maintenance: bool  # a maintenance window applied to the check when it ran
 
 
 class IncidentOut(BaseModel):

@@ -61,6 +61,10 @@ describe('formatWhen', () => {
     expect(formatWhen('2026-10-28T14:05:00Z', now, 'en-US')).toBe('Oct 28, 2:05 PM')
     expect(formatWhen('2025-12-30T14:05:00Z', now, 'en-US')).toBe('Dec 30, 2025, 2:05 PM')
   })
+
+  it('shows seconds on request', () => {
+    expect(formatWhen('2026-11-02T14:05:41Z', now, 'en-GB', 'medium')).toBe('Today 14:05:41')
+  })
 })
 
 describe('plural', () => {

@@ -60,6 +60,12 @@ async def redirect(hops: int = Path(ge=0, le=50)) -> RedirectResponse:
     return RedirectResponse(f"/redirect/{hops - 1}" if hops > 1 else "/ok", status_code=302)
 
 
+@app.get("/redirect-to")
+async def redirect_to(url: str) -> RedirectResponse:
+    """An open redirect, for testing that probes check every hop's address."""
+    return RedirectResponse(url, status_code=302)
+
+
 # ---------- Named sites --------------------------------------------------------
 
 

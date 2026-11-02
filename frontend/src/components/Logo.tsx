@@ -1,0 +1,25 @@
+/** The helmet mark: the body takes the text colour (so it follows the theme), the pulse
+ * line keeps the brand green. Decorative: always shown next to the "sakshy" text. */
+export function LogoMark({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="10 8 202 258" aria-hidden="true" focusable="false">
+      <g fill="currentColor">
+        <path d="M111 12C118 20 123 27 123 34C123 43 117 50 111 54C105 50 99 43 99 34C99 27 104 20 111 12Z" />
+        <rect x="107" y="50" width="8" height="24" />
+        <path d="M111 71L68 102C40 122 23 142 23 169H199C199 142 182 122 154 102Z" />
+        <rect x="13" y="175" width="196" height="20" rx="8" />
+        <path d="M23 205H78V248C66 254 57 262 46 262C37 262 29 259 23 255Z" />
+        <path d="M199 205H144V248C156 254 165 262 176 262C185 262 193 259 199 255Z" />
+        <rect x="102" y="200" width="18" height="52" rx="7" />
+      </g>
+      <polyline
+        points="45,142 78,142 93,112 115,166 130,132 140,142 177,142"
+        fill="none"
+        stroke="#1ea34a"
+        strokeWidth="11"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}

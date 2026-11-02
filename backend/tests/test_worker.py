@@ -45,6 +45,25 @@ async def eventually(condition: Callable[[], Awaitable[bool]]) -> None:
             await asyncio.sleep(0.05)
 
 
+async def test_a_full_batch_claims_again_without_waiting_for_the_tick(
+    engine: AsyncEngine, settings: Settings, emulator: str
+) -> None:
+    alice = await add_user(engine)
+    for _ in range(6):
+        await add_check(engine, alice, url=f"{emulator}/ok")
+    # Two slots and a 30 s tick: waiting for the tick between batches would take a minute.
+    saturated = settings.model_copy(update={"worker_concurrency": 2, "worker_claim_interval_s": 30})
+    stop = asyncio.Event()
+    worker = asyncio.create_task(run(saturated, stop))
+
+    async def all_ran() -> bool:
+        return len(await rows(engine, CheckResult)) >= 6
+
+    await eventually(all_ran)
+    stop.set()
+    await asyncio.wait_for(worker, timeout=5)
+
+
 async def test_worker_exits_when_stop_is_set(engine: AsyncEngine, settings: Settings) -> None:
     stop = asyncio.Event()
     task = asyncio.create_task(run(settings, stop))

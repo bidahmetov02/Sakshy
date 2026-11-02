@@ -184,6 +184,7 @@ async def complete(
         current = sm.Streak(state, failures, first_failure_at)
         was_retry = sm.is_retry(current)
         transition = sm.step(current, result.ok, checked_at)
+        in_maintenance = await _in_maintenance(conn, claim.check_id, group_id)
 
         await conn.execute(
             insert(CheckResult).values(
@@ -195,6 +196,7 @@ async def complete(
                 error_kind=result.error_kind,
                 error_message=result.error_message,
                 is_retry=was_retry,
+                in_maintenance=in_maintenance,
             )
         )
         if not was_retry:
@@ -205,11 +207,11 @@ async def complete(
                 await _open_incident(
                     conn,
                     claim.check_id,
-                    group_id,
                     transition.streak,
                     checked_at,
                     result,
                     recipients,
+                    in_maintenance,
                 )
             case sm.Event.INCIDENT_RECOVERED:
                 await _close_incident(conn, claim.check_id, checked_at, recipients)
@@ -274,26 +276,30 @@ async def _add_to_rollup(
     )
 
 
-async def _open_incident(
-    conn: AsyncConnection,
-    check_id: int,
-    group_id: int | None,
-    streak: sm.Streak,
-    detected_at: datetime,
-    result: ProbeResult,
-    recipients: list[str],
-) -> None:
-    """DOWN: open the incident, and queue the DOWN email unless in maintenance (then the
-    sweep queues it when the window ends)."""
+async def _in_maintenance(conn: AsyncConnection, check_id: int, group_id: int | None) -> bool:
+    """Whether a window targeting the check or its current group is active now."""
     w = MaintenanceWindow
     targets = w.check_id == check_id
     if group_id is not None:
         targets = or_(targets, w.group_id == group_id)
-    in_maintenance = (
+    return (
         await conn.execute(
             select(exists().where(w.starts_at <= func.now(), w.ends_at > func.now(), targets))
         )
     ).scalar_one()
+
+
+async def _open_incident(
+    conn: AsyncConnection,
+    check_id: int,
+    streak: sm.Streak,
+    detected_at: datetime,
+    result: ProbeResult,
+    recipients: list[str],
+    in_maintenance: bool,
+) -> None:
+    """DOWN: open the incident, and queue the DOWN email unless in maintenance (then the
+    sweep queues it when the window ends)."""
     incident_id = (
         await conn.execute(
             insert(Incident)
