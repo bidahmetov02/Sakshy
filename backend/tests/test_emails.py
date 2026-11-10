@@ -26,6 +26,7 @@ DOWN = Alert(
     end_reason=None,
     cause_kind=ErrorKind.TIMEOUT,
     cause_message="no response within 10 s",
+    owner_email="alice@x.io",
 )
 UP = replace(
     DOWN,

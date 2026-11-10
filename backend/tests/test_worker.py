@@ -12,11 +12,13 @@ from pathlib import Path
 
 import httpx2
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.models import CheckResult, MonitorState, WorkerHeartbeat
 from core.settings import Settings
+from core.telegram import TelegramMessage
 from tests.factories import add_check, add_user, rows, state_of
 from tests.mailpit import Mailpit, new_address
 from worker import heartbeat, state_machine
@@ -257,3 +259,36 @@ async def test_down_and_up_emails_end_to_end(
         )
         today = (await conn.execute(select(func.now()))).scalar_one().astimezone(UTC).date()
         assert set(tables) == {partition_name(today)}
+
+
+async def test_down_reaches_the_operators_telegram(
+    engine: AsyncEngine, fast: Settings, emulator: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(state_machine, "RETRY_DELAY", timedelta(milliseconds=50))
+    configured = fast.model_copy(
+        update={
+            "telegram_bot_token": SecretStr("123:abc"),
+            "telegram_chat_id": "42",
+            "telegram_owner_email": "alice@x.io",
+        }
+    )
+    sent: list[TelegramMessage] = []
+
+    async def send_telegram(msg: TelegramMessage) -> None:
+        sent.append(msg)
+
+    await add_check(engine, await add_user(engine), name="Shop", url=f"{emulator}/status/500")
+    stop = asyncio.Event()
+    worker = asyncio.create_task(run(configured, stop, send_telegram=send_telegram))
+    try:
+
+        async def alerted() -> bool:
+            return len(sent) == 1
+
+        await eventually(alerted)
+    finally:
+        stop.set()
+        await asyncio.wait_for(worker, timeout=5)
+
+    assert (sent[0].chat_id, sent[0].silent) == ("42", False)
+    assert sent[0].text.startswith("🔴 DOWN: Shop")

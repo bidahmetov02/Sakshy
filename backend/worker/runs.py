@@ -5,6 +5,7 @@ Every time comparison uses the database clock (`now()`), never the worker's.
 
 import enum
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -128,9 +129,16 @@ class Completion(enum.Enum):
 
 
 async def complete(
-    engine: AsyncEngine, worker_id: str, claim: Claim, result: ProbeResult, checked_at: datetime
+    engine: AsyncEngine,
+    worker_id: str,
+    claim: Claim,
+    result: ProbeResult,
+    checked_at: datetime,
+    extra_recipients: Sequence[str] = (),
 ) -> Completion:
     """Record one run in a single transaction: result, rollup, state, incident, outbox, notify.
+
+    `extra_recipients` are alerted besides the check's emails (the operator's Telegram).
 
     Locks the check's `check_state` row first (the lock-order rule), so pause/delete in the
     API and the maintenance sweep always see this run's committed effects, or vice versa.
@@ -181,6 +189,7 @@ async def complete(
             )
             return Completion.DISCARDED
 
+        recipients = [*recipients, *extra_recipients]
         current = sm.Streak(state, failures, first_failure_at)
         was_retry = sm.is_retry(current)
         transition = sm.step(current, result.ok, checked_at)

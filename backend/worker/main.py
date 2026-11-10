@@ -23,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.db import create_engine
 from core.log import configure_logging
 from core.settings import Settings, get_settings
-from worker import heartbeat, housekeeping, outbox, runs, sweep
+from core.telegram import SendTelegram, telegram_sender
+from worker import heartbeat, housekeeping, outbox, runs, sweep, telegram
 from worker.probe import create_client, probe
 
 log = logging.getLogger("worker")
@@ -58,11 +59,15 @@ class Worker:
         engine: AsyncEngine,
         client: httpx2.AsyncClient,
         send: outbox.Send,
+        send_telegram: SendTelegram | None = None,
     ) -> None:
         self.settings = settings
         self.engine = engine
         self.client = client
         self.send = send
+        self.send_telegram = send_telegram
+        tg = telegram.recipient(settings)
+        self.extra_recipients = (tg,) if tg else ()
         self.id = f"{socket.gethostname()}-{os.getpid()}-{secrets.token_hex(2)}"
         self.in_flight: set[asyncio.Task[None]] = set()
         self.slot_freed = asyncio.Event()
@@ -114,7 +119,9 @@ class Worker:
             result = await probe(
                 self.client, claim.url, claim.timeout_s, claim.expected_status, claim.expected_body
             )
-            outcome = await runs.complete(self.engine, self.id, claim, result, checked_at)
+            outcome = await runs.complete(
+                self.engine, self.id, claim, result, checked_at, self.extra_recipients
+            )
             if outcome is not runs.Completion.RECORDED:
                 log.info("check %d: result %s", claim.check_id, outcome.value)
         except Exception:
@@ -135,10 +142,14 @@ class Worker:
             ),
             (
                 s.worker_outbox_interval_s,
-                lambda: outbox.send_due(self.engine, s, self.send, stop),
+                lambda: outbox.send_due(self.engine, s, self.send, stop, self.send_telegram),
                 "outbox",
             ),
-            (s.worker_sweep_interval_s, lambda: sweep.sweep(self.engine), "maintenance sweep"),
+            (
+                s.worker_sweep_interval_s,
+                lambda: sweep.sweep(self.engine, self.extra_recipients),
+                "maintenance sweep",
+            ),
             (s.worker_housekeeping_interval_s, self.housekeep, "housekeeping"),
         ]
         return [asyncio.create_task(_every(stop, *job)) for job in jobs]
@@ -157,11 +168,24 @@ class Worker:
             log.warning("abandoned %d in-flight checks", len(pending))
 
 
-async def run(settings: Settings, stop: asyncio.Event, send: outbox.Send | None = None) -> None:
+async def run(
+    settings: Settings,
+    stop: asyncio.Event,
+    send: outbox.Send | None = None,
+    send_telegram: SendTelegram | None = None,
+) -> None:
     engine = create_engine(str(settings.database_url))
     try:
-        async with create_client(settings.probe_allowed_hosts) as client:
-            worker = Worker(settings, engine, client, send or outbox.smtp_sender(settings))
+        async with (
+            create_client(settings.probe_allowed_hosts) as client,
+            # Not the probe client: that one is built to look like a visitor, not an API user.
+            httpx2.AsyncClient(trust_env=False) as telegram_client,
+        ):
+            if send_telegram is None and settings.telegram_enabled:
+                send_telegram = telegram_sender(settings, telegram_client)
+            worker = Worker(
+                settings, engine, client, send or outbox.smtp_sender(settings), send_telegram
+            )
             await heartbeat.mark_alive(engine, worker.id)
             # Before claiming, so today's results partition exists.
             try:

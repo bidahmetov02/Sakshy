@@ -8,11 +8,13 @@ from typing import Any
 
 import aiosmtplib
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from core.models import AlertKind, IncidentEndReason, Notification, OutboxStatus
 from core.settings import Settings
+from core.telegram import TelegramError, TelegramMessage
 from tests.factories import add_check, add_incident, add_notification, add_user
 from tests.mailpit import Mailpit, new_address
 from worker.outbox import (
@@ -35,6 +37,19 @@ class FakeSMTP:
         self.sent: list[EmailMessage] = []
 
     async def __call__(self, msg: EmailMessage) -> None:
+        if self.errors:
+            raise self.errors.pop(0)
+        self.sent.append(msg)
+
+
+class FakeTelegram:
+    """Records what it sends; raises the given errors first, one per call."""
+
+    def __init__(self, *errors: Exception) -> None:
+        self.errors = list(errors)
+        self.sent: list[TelegramMessage] = []
+
+    async def __call__(self, msg: TelegramMessage) -> None:
         if self.errors:
             raise self.errors.pop(0)
         self.sent.append(msg)
@@ -95,6 +110,7 @@ async def test_claim_leases_due_rows_and_counts_the_attempt(
     )
     assert (alert.check_id, alert.check_name, alert.url) == (check, "Shop", "https://shop.example")
     assert alert.cause_message == "no response within 10 s"
+    assert alert.owner_email == "alice@x.io"
     assert about(await due_in(engine, n), CLAIM_LEASE)
     assert await claim(engine, 10) == []  # leased
 
@@ -307,3 +323,113 @@ async def test_unreachable_smtp_server_is_retried(
     assert retry.status is OutboxStatus.PENDING
     assert retry.last_error is not None
     assert retry.last_error.startswith("SMTPConnectError")
+
+
+async def test_smtp_login_and_encryption_follow_the_settings(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_send(msg: EmailMessage, **kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(aiosmtplib, "send", fake_send)
+    gmail = settings.model_copy(
+        update={
+            "smtp_host": "smtp.gmail.com",
+            "smtp_port": 587,
+            "smtp_tls": "starttls",
+            "smtp_username": "me@gmail.com",
+            "smtp_password": SecretStr("app-password"),
+        }
+    )
+    await smtp_sender(gmail)(EmailMessage())
+    await smtp_sender(gmail.model_copy(update={"smtp_tls": "tls", "smtp_port": 465}))(
+        EmailMessage()
+    )
+    await smtp_sender(settings)(EmailMessage())
+
+    pick = ("hostname", "port", "username", "password", "start_tls", "use_tls")
+    assert [tuple(c[k] for k in pick) for c in calls] == [
+        ("smtp.gmail.com", 587, "me@gmail.com", "app-password", True, False),
+        ("smtp.gmail.com", 465, "me@gmail.com", "app-password", False, True),
+        (settings.smtp_host, settings.smtp_port, None, None, False, False),
+    ]
+
+
+# ---------- Telegram ----------
+
+
+def with_telegram(settings: Settings) -> Settings:
+    return settings.model_copy(
+        update={
+            "telegram_bot_token": SecretStr("123:abc"),
+            "telegram_chat_id": "42",
+            "telegram_owner_email": "alice@x.io",
+        }
+    )
+
+
+async def test_telegram_rows_go_to_telegram_and_emails_to_smtp(
+    engine: AsyncEngine, settings: Settings, incident: int
+) -> None:
+    email = await add_notification(engine, incident, "a@x.io")
+    tg = await add_notification(engine, incident, "telegram:42")
+    smtp, telegram = FakeSMTP(), FakeTelegram()
+    assert await send_due(engine, with_telegram(settings), smtp, send_telegram=telegram) == 2
+
+    assert [m["To"] for m in smtp.sent] == ["a@x.io"]
+    [msg] = telegram.sent
+    assert (msg.chat_id, msg.silent) == ("42", False)  # alice owns the check: it rings
+    assert msg.text.startswith("🔴 DOWN: Shop")
+    assert {(await row(engine, n)).status for n in (email, tg)} == {OutboxStatus.SENT}
+
+
+async def test_another_users_check_reaches_telegram_silently(
+    engine: AsyncEngine, settings: Settings
+) -> None:
+    bob = await add_user(engine, "bob@x.io")
+    incident = await add_incident(engine, await add_check(engine, bob, name="Blog"))
+    await add_notification(engine, incident, "telegram:42")
+    telegram = FakeTelegram()
+    await send_due(engine, with_telegram(settings), FakeSMTP(), send_telegram=telegram)
+
+    [msg] = telegram.sent
+    assert msg.silent
+    assert msg.text.splitlines()[:2] == ["👤 bob@x.io", "🔴 DOWN: Blog"]
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (TelegramError(429, "Too Many Requests"), OutboxStatus.PENDING),
+        (ConnectionError("ConnectError: unreachable"), OutboxStatus.PENDING),
+        (TelegramError(403, "Forbidden: bot was blocked by the user"), OutboxStatus.FAILED),
+    ],
+    ids=["rate limited", "network", "blocked"],
+)
+async def test_telegram_failures_retry_or_fail_like_emails(
+    engine: AsyncEngine,
+    settings: Settings,
+    incident: int,
+    error: Exception,
+    status: OutboxStatus,
+) -> None:
+    n = await add_notification(engine, incident, "telegram:42")
+    await send_due(engine, with_telegram(settings), FakeSMTP(), send_telegram=FakeTelegram(error))
+    assert (await row(engine, n)).status is status
+
+
+async def test_telegram_row_fails_at_once_if_telegram_was_turned_off(
+    engine: AsyncEngine, settings: Settings, incident: int
+) -> None:
+    n = await add_notification(engine, incident, "telegram:42")
+    smtp = FakeSMTP()
+    await send_due(engine, settings, smtp)
+
+    assert smtp.sent == []
+    failed = await row(engine, n)
+    assert (failed.status, failed.last_error) == (
+        OutboxStatus.FAILED,
+        "TelegramDisabled: Telegram alerts are not configured",
+    )

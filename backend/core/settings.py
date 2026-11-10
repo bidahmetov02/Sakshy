@@ -1,7 +1,7 @@
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import PostgresDsn, SecretStr, field_validator
+from pydantic import PostgresDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -41,8 +41,20 @@ class Settings(BaseSettings):
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     smtp_timeout_s: float = 10.0
+    # "starttls" (port 587) or "tls" (port 465) refuse to send unencrypted; "none" is for
+    # Mailpit. Username and password go together, or neither.
+    smtp_tls: Literal["none", "starttls", "tls"] = "none"
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
     mail_from: str = "Sakshy <alerts@sakshy.local>"
-    app_base_url: str = "http://localhost:8080"  # for links in emails
+    app_base_url: str = "http://localhost:8080"  # for links in alerts
+
+    # Telegram alerts to one chat, the operator's, for every check on the server: all
+    # three or none. The owner's own checks ring; everyone else's arrive silently.
+    telegram_bot_token: SecretStr | None = None
+    telegram_chat_id: str | None = None
+    telegram_owner_email: str | None = None  # the operator's Sakshy login
+    telegram_api_url: str = "https://api.telegram.org"
 
     @field_validator("probe_allowed_hosts", mode="before")
     @classmethod
@@ -50,6 +62,24 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             value = value.split(",")
         return frozenset(h.strip().lower() for h in value if h.strip())
+
+    @model_validator(mode="after")
+    def _all_or_none(self) -> Self:
+        smtp = {"SMTP_USERNAME": self.smtp_username, "SMTP_PASSWORD": self.smtp_password}
+        telegram = {
+            "TELEGRAM_BOT_TOKEN": self.telegram_bot_token,
+            "TELEGRAM_CHAT_ID": self.telegram_chat_id,
+            "TELEGRAM_OWNER_EMAIL": self.telegram_owner_email,
+        }
+        for group in (smtp, telegram):
+            missing = [name for name, value in group.items() if not value]
+            if 0 < len(missing) < len(group):
+                raise ValueError(f"set {', '.join(group)} together; missing {', '.join(missing)}")
+        return self
+
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token)
 
 
 @lru_cache

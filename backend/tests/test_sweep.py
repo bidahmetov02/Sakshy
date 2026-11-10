@@ -47,6 +47,15 @@ async def test_queues_the_down_email_once_the_window_has_ended(
     assert len(await rows(engine, Notification)) == 2
 
 
+async def test_extra_recipients_get_the_released_down_too(engine: AsyncEngine, alice: int) -> None:
+    check_id = await add_check(engine, alice, alert_emails=["a@x.io"])
+    await add_window(engine, alice, check_id=check_id, **ENDED)
+    await suppressed_incident(engine, check_id)
+
+    assert await sweep(engine, ("telegram:42",)) == 1
+    assert await emails(engine) == {(AlertKind.DOWN, "a@x.io"), (AlertKind.DOWN, "telegram:42")}
+
+
 @pytest.mark.parametrize("target", ["check", "group"])
 async def test_waits_while_a_window_still_applies(
     engine: AsyncEngine, alice: int, target: str

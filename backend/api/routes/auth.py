@@ -1,10 +1,11 @@
 """Register, log in and out, who am I (`design/sequences.md` (e))."""
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from api.deps import AppSettings, Session, UserId
+from api.notify import OperatorNotifier
 from api.schemas import Credentials, UserOut
 from api.security import (
     clear_session_cookie,
@@ -19,7 +20,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(
-    body: Credentials, response: Response, session: Session, settings: AppSettings
+    body: Credentials,
+    response: Response,
+    session: Session,
+    settings: AppSettings,
+    notifier: OperatorNotifier,
+    background: BackgroundTasks,
 ) -> UserOut:
     user = User(email=body.email, password_hash=await hash_password(body.password))
     session.add(user)
@@ -28,6 +34,9 @@ async def register(
     except IntegrityError:  # users_email_uq, case-insensitive
         raise HTTPException(status.HTTP_409_CONFLICT, "email already registered") from None
     set_session_cookie(response, settings, user.id)
+    if notifier.enabled:
+        users = (await session.execute(select(func.count()).select_from(User))).scalar_one()
+        notifier.tell(background, user.email, ["🆕 Signed up", f"Users now: {users}"])
     return UserOut(id=user.id, email=user.email)
 
 

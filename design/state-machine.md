@@ -80,6 +80,10 @@ and sets `down_alert_queued = true`.
 5. Recipients: a check **in a group** alerts the **group's** `alert_emails`,
    which replace the check's own list. An **ungrouped** check alerts its own
    list. Recipients are resolved when the email is enqueued.
+6. If the operator configured Telegram (`TELEGRAM_*`), every check also alerts
+   the operator's chat, as one more outbox recipient (`telegram:<chat id>`).
+   Rules 1–4 apply to it too. The operator's own checks ring; other users'
+   checks arrive silently, with the owner's email.
 
 ## Behaviour to document for users
 

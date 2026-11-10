@@ -7,12 +7,13 @@ Updating or deleting a group notifies open streams of its checks: their effectiv
 list, group or maintenance changes.
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from sqlalchemy import Select, and_, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import Session, UserId
+from api.notify import OperatorNotifier, one_line
 from api.queries import counts_toward_status, tiered_status
 from api.schemas import GroupIn, GroupOut, GroupPatch
 from core.events import notify_checks
@@ -111,10 +112,16 @@ async def get_group(group_id: int, user_id: UserId, session: Session) -> GroupOu
 
 @router.patch("/{group_id}", responses={409: {}})
 async def update_group(
-    group_id: int, body: GroupPatch, user_id: UserId, session: Session
+    group_id: int,
+    body: GroupPatch,
+    user_id: UserId,
+    session: Session,
+    notifier: OperatorNotifier,
+    background: BackgroundTasks,
 ) -> GroupOut:
     """A new alert list applies to emails queued from now on."""
     group = await _owned(session, user_id, group_id)
+    old_emails = list(group.alert_emails)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(group, field, value)
     try:
@@ -123,7 +130,15 @@ async def update_group(
         raise _duplicate() from None
     await _notify_members(session, user_id, group_id)
     await session.commit()
-    return await _get(session, user_id, group_id)
+    updated = await _get(session, user_id, group_id)
+    if updated.alert_emails != old_emails and updated.check_count > 0:
+        lines = [
+            f"✏️ Group alerts changed: {one_line(updated.name)}",
+            f"Alerts: {', '.join(updated.alert_emails)}",
+            f"Checks in the group: {updated.check_count}",
+        ]
+        await notifier.tell_about_user(background, session, user_id, lines)
+    return updated
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -9,13 +9,14 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import AppSettings, Session, UserId
+from api.notify import OperatorNotifier, one_line
 from api.queries import (
     Limit,
     RangeQuery,
@@ -123,6 +124,15 @@ async def list_checks(
     return [check_out(*row) for row in await session.execute(stmt)]
 
 
+def _summary(title: str, check: CheckOut) -> list[str]:
+    """For the operator: what is checked, and who gets emailed about it."""
+    return [
+        f"{title}: {one_line(check.name)}",
+        one_line(check.url),
+        f"Alerts: {', '.join(check.effective_alert_emails)}",
+    ]
+
+
 def _require_public_url(url: str, settings: AppSettings) -> None:
     """Reject obviously private targets early; the worker refuses the rest at connect time."""
     if (host := private_url_host(url, settings.probe_allowed_hosts)) is not None:
@@ -137,7 +147,12 @@ def _require_public_url(url: str, settings: AppSettings) -> None:
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_check(
-    body: CheckIn, user_id: UserId, session: Session, settings: AppSettings
+    body: CheckIn,
+    user_id: UserId,
+    session: Session,
+    settings: AppSettings,
+    notifier: OperatorNotifier,
+    background: BackgroundTasks,
 ) -> CheckOut:
     _require_public_url(body.url, settings)
     if body.group_id is not None:
@@ -148,7 +163,9 @@ async def create_check(
     session.add(CheckState(check_id=check.id))  # due now: the first run happens right away
     await _notify(session, check.id)
     await session.commit()
-    return await _get(session, user_id, check.id)
+    created = await _get(session, user_id, check.id)
+    await notifier.tell_about_user(background, session, user_id, _summary("🔎 New check", created))
+    return created
 
 
 @router.get("/{check_id}")
@@ -158,10 +175,17 @@ async def get_check(check_id: int, user_id: UserId, session: Session) -> CheckOu
 
 @router.patch("/{check_id}")
 async def update_check(
-    check_id: int, body: CheckPatch, user_id: UserId, session: Session, settings: AppSettings
+    check_id: int,
+    body: CheckPatch,
+    user_id: UserId,
+    session: Session,
+    settings: AppSettings,
+    notifier: OperatorNotifier,
+    background: BackgroundTasks,
 ) -> CheckOut:
     """State is kept: the next run uses the new config and decides."""
     check, _ = await _lock(session, user_id, check_id)
+    before = await _get(session, user_id, check_id) if notifier.enabled else None
     changes = body.model_dump(exclude_unset=True)
     current = {
         "name": check.name,
@@ -202,7 +226,15 @@ async def update_check(
         )
     await _notify(session, check_id)
     await session.commit()
-    return await _get(session, user_id, check_id)
+    after = await _get(session, user_id, check_id)
+    if before is not None and (before.url, before.effective_alert_emails) != (
+        after.url,
+        after.effective_alert_emails,
+    ):
+        await notifier.tell_about_user(
+            background, session, user_id, _summary("✏️ Check changed", after)
+        )
+    return after
 
 
 @router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT)

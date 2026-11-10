@@ -1,9 +1,10 @@
-"""The notification outbox (`design/sequences.md` (b)): enqueueing and sending alert emails.
+"""The notification outbox (`design/sequences.md` (b)): enqueueing and sending alerts.
 
 Rows are queued in the same transaction as the incident change that causes them, one per
-recipient. The sender claims due rows, sends each as its own email and records the
-outcome. Delivery is at-least-once: a crash between the SMTP send and marking the row sent
-re-sends it once the claim expires.
+recipient: an email address, or the operator's Telegram chat (`worker/telegram.py`). The
+sender claims due rows, sends each as its own message and records the outcome. Delivery
+is at-least-once: a crash between the send and marking the row sent re-sends it once the
+claim expires.
 """
 
 import asyncio
@@ -27,9 +28,12 @@ from core.models import (
     Incident,
     Notification,
     OutboxStatus,
+    User,
 )
 from core.settings import Settings
-from worker.emails import Alert, render
+from core.telegram import SendTelegram, TelegramError
+from worker import emails, telegram
+from worker.emails import Alert
 
 log = logging.getLogger("worker.outbox")
 
@@ -87,6 +91,7 @@ async def claim(engine: AsyncEngine, limit: int) -> list[Alert]:
             Notification.id.in_(due),
             Notification.incident_id == Incident.id,
             Incident.check_id == Check.id,
+            Check.owner_id == User.id,
         )
         .values(
             next_attempt_at=func.now() + CLAIM_LEASE,
@@ -106,6 +111,7 @@ async def claim(engine: AsyncEngine, limit: int) -> list[Alert]:
             Incident.end_reason,
             Incident.cause_kind,
             Incident.cause_message,
+            User.email,
         )
     )
     async with engine.begin() as conn:
@@ -147,7 +153,12 @@ async def record(
 
 
 def is_permanent(exc: Exception) -> bool:
-    """5xx replies won't change on retry; 4xx replies, timeouts and connection errors may."""
+    """SMTP 5xx replies won't change on retry; 4xx replies, timeouts and connection errors
+    may. Telegram follows HTTP: 4xx is final, except 429 (rate limited)."""
+    if isinstance(exc, TelegramError):
+        return 400 <= exc.code < 500 and exc.code != 429
+    if isinstance(exc, TelegramDisabled):
+        return True
     if isinstance(exc, aiosmtplib.SMTPRecipientsRefused):
         return all(r.code >= 500 for r in exc.recipients)
     if isinstance(exc, aiosmtplib.SMTPResponseException):
@@ -156,21 +167,25 @@ def is_permanent(exc: Exception) -> bool:
 
 
 async def send_due(
-    engine: AsyncEngine, settings: Settings, send: Send, stop: asyncio.Event | None = None
+    engine: AsyncEngine,
+    settings: Settings,
+    send: Send,
+    stop: asyncio.Event | None = None,
+    send_telegram: SendTelegram | None = None,
 ) -> int:
-    """Claim one batch and send it, one email at a time. Returns the number sent."""
+    """Claim one batch and send it, one message at a time. Returns the number sent."""
     sent = 0
     for alert in await claim(engine, BATCH):
         if stop is not None and stop.is_set():
             break  # the rest become due again when their claim expires
         try:
-            await send(render(alert, settings.mail_from, settings.app_base_url))
+            await _send_one(alert, settings, send, send_telegram)
         except Exception as exc:
             final = is_permanent(exc) or alert.attempts >= MAX_ATTEMPTS
             error = f"{type(exc).__name__}: {exc}"[:MAX_ERROR]
             await record(engine, alert, Outcome.FAILED if final else Outcome.RETRY, error)
             log.warning(
-                "%s email %d to %s, attempt %d %s: %s",
+                "%s alert %d to %s, attempt %d %s: %s",
                 alert.kind.value,
                 alert.notification_id,
                 alert.recipient,
@@ -184,9 +199,28 @@ async def send_due(
     return sent
 
 
+async def _send_one(
+    alert: Alert, settings: Settings, send: Send, send_telegram: SendTelegram | None
+) -> None:
+    if not alert.recipient.startswith(telegram.PREFIX):
+        await send(emails.render(alert, settings.mail_from, settings.app_base_url))
+        return
+    # Queued while Telegram was configured; it has been turned off since.
+    if send_telegram is None or settings.telegram_owner_email is None:
+        raise TelegramDisabled("Telegram alerts are not configured")
+    await send_telegram(
+        telegram.render(alert, settings.telegram_owner_email, settings.app_base_url)
+    )
+
+
+class TelegramDisabled(Exception):
+    pass
+
+
 def smtp_sender(settings: Settings) -> Send:
     """One SMTP connection per email: alert volume is low, and a broken connection can
     never take later emails down with it."""
+    password = settings.smtp_password.get_secret_value() if settings.smtp_password else None
 
     async def send(msg: EmailMessage) -> None:
         await aiosmtplib.send(
@@ -194,6 +228,12 @@ def smtp_sender(settings: Settings) -> Send:
             hostname=settings.smtp_host,
             port=settings.smtp_port,
             timeout=settings.smtp_timeout_s,
+            username=settings.smtp_username or None,
+            password=password,
+            use_tls=settings.smtp_tls == "tls",
+            # Required, not opportunistic: a stripped STARTTLS offer fails the send instead
+            # of sending the password in the clear.
+            start_tls=settings.smtp_tls == "starttls",
         )
 
     return send

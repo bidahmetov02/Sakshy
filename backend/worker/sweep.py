@@ -2,6 +2,7 @@
 window is queued once no window applies any more and the incident is still open."""
 
 import logging
+from collections.abc import Sequence
 
 from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -12,8 +13,9 @@ from worker.outbox import alert_recipients, enqueue
 log = logging.getLogger("worker.sweep")
 
 
-async def sweep(engine: AsyncEngine) -> int:
-    """Queue the DOWN emails that are due. Returns the number of incidents alerted.
+async def sweep(engine: AsyncEngine, extra_recipients: Sequence[str] = ()) -> int:
+    """Queue the DOWN alerts that are due, to the check's emails and `extra_recipients`.
+    Returns the number of incidents alerted.
 
     Locks `check_state` first (the lock-order rule) with SKIP LOCKED: a check being
     completed right now is skipped until the next round. Otherwise the sweep could queue
@@ -37,7 +39,7 @@ async def sweep(engine: AsyncEngine) -> int:
     async with engine.begin() as conn:
         rows = (await conn.execute(due)).all()
         for incident_id, recipients in rows:
-            await enqueue(conn, incident_id, AlertKind.DOWN, recipients)
+            await enqueue(conn, incident_id, AlertKind.DOWN, [*recipients, *extra_recipients])
         if rows:
             await conn.execute(
                 update(Incident)

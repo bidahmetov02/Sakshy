@@ -258,6 +258,21 @@ async def test_third_failure_opens_an_incident_and_queues_down_emails(
     assert state.next_run_at - await db_now(engine) > RETRY_DELAY
 
 
+async def test_extra_recipients_get_down_and_up_too(engine: AsyncEngine, alice: int) -> None:
+    check_id = await add_check(engine, alice, alert_emails=["a@x.io"])
+    for result in (FAIL, FAIL, FAIL, OK):
+        await make_due(engine, check_id)
+        c = await claim_one(engine, check_id)
+        await complete(engine, W1, c, result, c.claimed_at, ("telegram:42",))
+
+    assert {(n.kind, n.recipient) for n in await rows(engine, Notification)} == {
+        (AlertKind.DOWN, "a@x.io"),
+        (AlertKind.DOWN, "telegram:42"),
+        (AlertKind.UP, "a@x.io"),
+        (AlertKind.UP, "telegram:42"),
+    }
+
+
 async def test_more_failures_while_down_change_nothing(engine: AsyncEngine, alice: int) -> None:
     check_id = await add_check(engine, alice)
     await go_down(engine, check_id)

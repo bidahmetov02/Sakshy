@@ -1,0 +1,74 @@
+# Production, on top of docker-compose.yml. With .env from .env.example (its COMPOSE_FILE
+# adds this file), on the server: docker compose up -d --build
+# Secrets and settings come from that .env.
+# Only Caddy is reachable from outside: it serves HTTPS and proxies to the frontend.
+
+x-prod-db: &prod-db
+  DATABASE_URL: postgresql+asyncpg://sakshy:${POSTGRES_PASSWORD:?set in .env}@db:5432/sakshy
+  PROBE_ALLOWED_HOSTS: "" # no exceptions to the private-address block
+
+# Optional: leave all three empty to turn Telegram off. The worker sends check alerts; the
+# API tells the operator about other users' sign-ups and checks.
+x-telegram: &telegram
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+  TELEGRAM_OWNER_EMAIL: ${TELEGRAM_OWNER_EMAIL:-}
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    ports: !reset []
+    volumes: !override
+      - db-data:/var/lib/postgresql # no test database in production
+
+  migrate:
+    environment: *prod-db
+
+  api:
+    environment:
+      <<: [*prod-db, *telegram]
+      JWT_SECRET: ${JWT_SECRET:?set in .env}
+    ports: !reset []
+
+  worker:
+    environment:
+      <<: [*prod-db, *telegram]
+      APP_BASE_URL: https://${DOMAIN:?set in .env}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_TLS: ${SMTP_TLS:-starttls}
+      SMTP_USERNAME: ${SMTP_USERNAME:?set in .env}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?set in .env}
+      MAIL_FROM: ${MAIL_FROM:?set in .env}
+
+  frontend:
+    ports: !reset []
+
+  # Dev only: started only with --profile dev.
+  emulator:
+    profiles: ["dev"]
+    ports: !reset []
+  mailpit:
+    profiles: ["dev"]
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.10
+    environment:
+      DOMAIN: ${DOMAIN:?set in .env}
+    ports:
+      - "80:80" # Let's Encrypt HTTP challenge, and redirect to HTTPS
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates: keep them, or Let's Encrypt rate limits bite
+      - caddy-config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:
