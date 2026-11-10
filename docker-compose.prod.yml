@@ -1,7 +1,8 @@
 # Production, on top of docker-compose.yml. With .env from .env.example (its COMPOSE_FILE
 # adds this file), on the server: docker compose up -d --build
 # Secrets and settings come from that .env.
-# Only Caddy is reachable from outside: it serves HTTPS and proxies to the frontend.
+# Nothing is reachable from outside: the host's Caddy serves HTTPS and proxies to the
+# frontend on 127.0.0.1:$FRONTEND_PORT (site block: deploy/Caddyfile).
 
 x-prod-db: &prod-db
   DATABASE_URL: postgresql+asyncpg://sakshy:${POSTGRES_PASSWORD:?set in .env}@db:5432/sakshy
@@ -43,7 +44,8 @@ services:
       MAIL_FROM: ${MAIL_FROM:?set in .env}
 
   frontend:
-    ports: !reset []
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-8090}:80"
 
   # Dev only: started only with --profile dev.
   emulator:
@@ -52,23 +54,3 @@ services:
   mailpit:
     profiles: ["dev"]
     ports: !reset []
-
-  caddy:
-    image: caddy:2.10
-    environment:
-      DOMAIN: ${DOMAIN:?set in .env}
-    ports:
-      - "80:80" # Let's Encrypt HTTP challenge, and redirect to HTTPS
-      - "443:443"
-      - "443:443/udp" # HTTP/3
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data # certificates: keep them, or Let's Encrypt rate limits bite
-      - caddy-config:/config
-    depends_on:
-      - frontend
-    restart: unless-stopped
-
-volumes:
-  caddy-data:
-  caddy-config:

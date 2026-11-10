@@ -12,10 +12,11 @@ update the server (below).
 
 ## How it runs
 
-One Ubuntu VPS, everything in Docker. Caddy is the only thing reachable from outside
-(80, 443): it gets the Let's Encrypt certificate for the DuckDNS name and proxies to the
-frontend's nginx, which serves the SPA and proxies `/api`. Database, API and worker ports
-stay closed; Mailpit and the emulator don't start.
+One Ubuntu VPS shared with other apps. The host's Caddy (systemd, not Docker) owns 80/443:
+the site block in `deploy/Caddyfile`, added to `/etc/caddy/Caddyfile`, gets the certificate
+for the DuckDNS name and proxies to `127.0.0.1:$FRONTEND_PORT`. That is the frontend's
+nginx, which serves the SPA and proxies `/api`. Nothing else is published; Mailpit and the
+emulator don't start.
 
 `COMPOSE_FILE` in `.env` adds `docker-compose.prod.yml`, so plain `docker compose ...` on the
 server is always production.
